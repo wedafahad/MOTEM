@@ -1,0 +1,425 @@
+{
+  "employees": [
+    {
+      "id": "manager",
+      "name": "المدير",
+      "isWriter": false,
+      "isEvaluator": true,
+      "level": null,
+      "specialty": null,
+      "managerId": null,
+      "writerCode": null,
+      "evaluatorCode": "MGR-1PA1",
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "waad",
+      "name": "وداد الدريني",
+      "isWriter": true,
+      "isEvaluator": true,
+      "level": "senior",
+      "specialty": "general",
+      "managerId": "manager",
+      "writerCode": "WAAD-K0TO",
+      "evaluatorCode": "EVWAAD-XF8Z",
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "maimouna",
+      "name": "ميمونة المرشد",
+      "isWriter": true,
+      "isEvaluator": false,
+      "level": "writer",
+      "specialty": "general",
+      "managerId": "waad",
+      "writerCode": "MAI-9M9O",
+      "evaluatorCode": null,
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "hamzah",
+      "name": "حمزة السويلم",
+      "isWriter": true,
+      "isEvaluator": false,
+      "level": "writer",
+      "specialty": "general",
+      "managerId": "waad",
+      "writerCode": "HAM-P7HZ",
+      "evaluatorCode": null,
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "afnan",
+      "name": "أفنان الأسمري",
+      "isWriter": true,
+      "isEvaluator": false,
+      "level": "writer",
+      "specialty": "general",
+      "managerId": "waad",
+      "writerCode": "AFN-OQRR",
+      "evaluatorCode": null,
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "sarah",
+      "name": "سارة القحطاني",
+      "isWriter": true,
+      "isEvaluator": false,
+      "level": "writer",
+      "specialty": "general",
+      "managerId": "waad",
+      "writerCode": "SAR-KTO6",
+      "evaluatorCode": null,
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    },
+    {
+      "id": "ahmed",
+      "name": "أحمد بكري",
+      "isWriter": true,
+      "isEvaluator": false,
+      "level": "writer",
+      "specialty": "general",
+      "managerId": "waad",
+      "writerCode": "AHM-8TRA",
+      "evaluatorCode": null,
+      "active": true,
+      "createdAt": "2026-08-16T16:28:21.057531Z",
+      "updatedAt": "2026-08-16T16:28:21.057531Z"
+    }
+  ],
+  "settings": {
+    "revisionValueMultiplier": 0.5,
+    "adminPassword": "kenayah-6148",
+    "pillars": [
+      {
+        "id": "quality",
+        "name": "جودة الكتابة والعمل",
+        "type": "rubric_group",
+        "weightWriter": 60,
+        "weightSenior": 45,
+        "criteria": [
+          {
+            "id": "lang_accuracy",
+            "name": "الدقة اللغوية والتحريرية",
+            "weightCreative": 15,
+            "weightFormal": 15,
+            "anchors": {
+              "5": "صفر أخطاء إملائية/نحوية، تحرير نظيف دون حاجة لمراجعة تصحيحية",
+              "3": "أخطاء طفيفة متفرقة (1-3) لا تحتاج إعادة صياغة",
+              "1": "أخطاء متكررة تستدعي تدقيقًا كاملًا"
+            }
+          },
+          {
+            "id": "identity_consistency",
+            "name": "الاتساق مع الهوية والتوجيهات",
+            "weightCreative": 15,
+            "weightFormal": 20,
+            "anchors": {
+              "5": "يطابق دليل الأسلوب/البريف دون أي انحراف",
+              "3": "انحراف بسيط في نقطة أو نقطتين يحتاج تصحيح",
+              "1": "خروج عن الهوية يستدعي إعادة كتابة كاملة"
+            }
+          },
+          {
+            "id": "originality",
+            "name": "الأصالة والقيمة الإبداعية",
+            "weightCreative": 30,
+            "weightFormal": 10,
+            "anchors": {
+              "5": "زاوية أو فكرة لم تُطرح سابقًا في محتوى مشابه، ملحوظة دون تلقين",
+              "3": "تنفيذ سليم ضمن أنماط متوقعة",
+              "1": "إعادة صياغة لأفكار/عبارات سبق استخدامها في مشاريع أخرى للفريق"
+            }
+          },
+          {
+            "id": "clarity_structure",
+            "name": "الوضوح والبنية المنطقية",
+            "weightCreative": 5,
+            "weightFormal": 15,
+            "anchors": {
+              "5": "يُفهم من قراءة واحدة، الفكرة الرئيسية واضحة خلال أول 3 جمل",
+              "3": "يحتاج قراءة ثانية لفهم الترابط",
+              "1": "لا تسلسل منطقي واضح"
+            }
+          },
+          {
+            "id": "audience_fit",
+            "name": "الملاءمة للجمهور والسياق",
+            "weightCreative": 5,
+            "weightFormal": 10,
+            "anchors": {
+              "5": "اللغة والنبرة مطابقة تمامًا لجمهور العميل المستهدف",
+              "3": "مناسب عمومًا، يحتاج تعديل بسيط بالنبرة/المستوى",
+              "1": "لا يناسب الجمهور المستهدف إطلاقًا"
+            }
+          },
+          {
+            "id": "feedback_handling",
+            "name": "التعامل مع المراجعة والتوجيه",
+            "weightCreative": 10,
+            "weightFormal": 10,
+            "anchors": {
+              "5": "يطبّق الملاحظة بدقة من أول مرة، ولا يكرر نفس نوع الخطأ لاحقًا",
+              "3": "يطبّق الملاحظة لكن يحتاج توضيح إضافي أحيانًا",
+              "1": "يقاوم التعديل أو يكرر نفس الخطأ رغم التوجيه السابق"
+            }
+          },
+          {
+            "id": "work_diversity",
+            "name": "تنوع الأعمال ومدى إجادتها",
+            "weightCreative": 10,
+            "weightFormal": 10,
+            "anchors": {
+              "5": "ينجز أكثر من نوع/شكل من المحتوى بنفس المستوى العالي من الجودة",
+              "3": "يجيد نوعًا واحدًا بعمق، وأداؤه في الأنواع الأخرى مقبول لا أكثر",
+              "1": "إنتاجه يقتصر على نمط واحد متكرر، ويضعف أداؤه بشكل ملحوظ عند الخروج عنه"
+            }
+          },
+          {
+            "id": "attention_to_detail",
+            "name": "الانتباه للتفاصيل",
+            "weightCreative": 10,
+            "weightFormal": 10,
+            "anchors": {
+              "5": "يلتقط أدق التفاصيل (أرقام، أسماء، تنسيق، اتساق العلامات) دون أي إغفال يستدعي تصحيحًا لاحقًا",
+              "3": "يغفل تفاصيل صغيرة متفرقة لا تؤثر على المعنى العام لكنها تحتاج تنبيهًا",
+              "1": "إغفال متكرر لتفاصيل جوهرية (أرقام خاطئة، تناقض في المعلومات، تنسيق غير متسق) يستدعي مراجعة كاملة"
+            }
+          }
+        ],
+        "category": "technical"
+      },
+      {
+        "id": "engagement",
+        "name": "التفاعل والمساهمة الجماعية",
+        "type": "rubric_group",
+        "weightWriter": 10,
+        "weightSenior": 5,
+        "criteria": [
+          {
+            "id": "brainstorming",
+            "name": "المشاركة في العصف الذهني",
+            "weight": 34,
+            "anchors": {
+              "5": "يطرح أفكارًا جديدة بانتظام في جلسات العصف الذهني، ويُبنى على أفكاره من الآخرين",
+              "3": "يشارك عند الطرح المباشر عليه، لكن دون مبادرة طرح أفكار من تلقاء نفسه",
+              "1": "حضور صامت متكرر أو تغيّب متكرر عن الجلسات"
+            }
+          },
+          {
+            "id": "knowledge_sharing",
+            "name": "مشاركة الفوائد والمعرفة المهنية",
+            "weight": 33,
+            "anchors": {
+              "5": "شارك مورّدًا أو تقنية كتابة مفيدة مرتين أو أكثر هذا الربع",
+              "3": "شارك مرة واحدة هذا الربع",
+              "1": "لم يشارك أي فائدة مهنية طوال الربع"
+            }
+          },
+          {
+            "id": "initiative",
+            "name": "المبادرة",
+            "weight": 33,
+            "anchors": {
+              "5": "اقترح تحسينًا أو أنشأ محتوى إبداعيًا دون أن يُطلب منه، ونُفِّذ الاقتراح فعليًا (مرتان فأكثر)",
+              "3": "قدّم اقتراحًا واحدًا موثقًا هذا الربع، سواء نُفِّذ أم لا",
+              "1": "لم يبادر بأي اقتراح، وينتظر التوجيه الكامل لكل خطوة"
+            }
+          }
+        ],
+        "category": "behavioral"
+      },
+      {
+        "id": "client_satisfaction",
+        "name": "رضا العميل (غير مباشر)",
+        "type": "rubric_group",
+        "weightWriter": 10,
+        "weightSenior": 10,
+        "criteria": [
+          {
+            "id": "first_draft_acceptance",
+            "name": "نسبة القبول من أول مسودة",
+            "type": "ratio",
+            "metric": "firstDraftAcceptRate",
+            "unit": "%",
+            "weight": 50,
+            "bands": {
+              "5": 90,
+              "3": 60,
+              "1": 0
+            },
+            "higherIsBetter": true
+          },
+          {
+            "id": "revision_rounds",
+            "name": "جولات تعديل المحتوى لكل مشروع",
+            "type": "ratio",
+            "metric": "avgContentRevisionRounds",
+            "unit": "جولة",
+            "weight": 50,
+            "bands": {
+              "5": 1,
+              "3": 3,
+              "1": 4
+            },
+            "higherIsBetter": false
+          }
+        ],
+        "category": "technical"
+      },
+      {
+        "id": "discipline",
+        "name": "الانضباط التشغيلي",
+        "type": "rubric_group",
+        "weightWriter": 10,
+        "weightSenior": 10,
+        "criteria": [
+          {
+            "id": "on_time_delivery",
+            "name": "نسبة التسليم في الموعد",
+            "type": "ratio",
+            "metric": "onTimeRate",
+            "unit": "%",
+            "weight": 32,
+            "bands": {
+              "5": 95,
+              "3": 75,
+              "1": 0
+            },
+            "higherIsBetter": true
+          },
+          {
+            "id": "task_completion",
+            "name": "نسبة إنجاز المهام الموكلة",
+            "type": "ratio",
+            "metric": "taskCompletionRate",
+            "unit": "%",
+            "weight": 32,
+            "bands": {
+              "5": 100,
+              "3": 80,
+              "1": 0
+            },
+            "higherIsBetter": true
+          },
+          {
+            "id": "review_path_adherence",
+            "name": "الالتزام بمسار المراجعة (مسودة→مراجعة→تعديل)",
+            "type": "rubric",
+            "weight": 16,
+            "anchors": {
+              "5": "يلتزم دائمًا بمسار العمل المتفق عليه دون تجاوز خطوات",
+              "3": "التزام جزئي، يحتاج تذكير أحيانًا",
+              "1": "لا يلتزم بمسار المراجعة المتفق عليه"
+            }
+          },
+          {
+            "id": "task_pressure_management",
+            "name": "إدارة المهام والضغط",
+            "type": "rubric",
+            "weight": 20,
+            "anchors": {
+              "5": "يدير أكثر من مهمة/موعد متزامن دون تراجع في الجودة، ويرتّب أولوياته بوضوح وقت ضغط العمل",
+              "3": "ينجز مهامه لكن يحتاج تذكيرًا أو دعمًا عند تزاحم المواعيد",
+              "1": "يتأثر أداؤه بشكل واضح عند ازدحام المهام، ويحتاج إعادة توزيع للعمل عنه"
+            }
+          }
+        ],
+        "category": "behavioral"
+      },
+      {
+        "id": "growth",
+        "name": "النمو المهني",
+        "type": "rubric_group",
+        "category": "behavioral",
+        "weightWriter": 10,
+        "weightSenior": 10,
+        "criteria": [
+          {
+            "id": "growth_courses",
+            "name": "النمو المهني (دورات لغوية أو مهنية)",
+            "weight": 100,
+            "anchors": {
+              "5": "أكمل دورتين لغويتين أو مهنيتين أو أكثر هذا الربع مع أثر ملحوظ في عينات المراجعة",
+              "3": "أكمل دورة لغوية أو مهنية واحدة هذا الربع دون أثر ملحوظ بعد",
+              "1": "لم يكمل أي دورة لغوية أو مهنية هذا الربع"
+            }
+          }
+        ]
+      },
+      {
+        "id": "leadership",
+        "name": "القيادة وتطوير الآخرين",
+        "type": "rubric_group",
+        "category": "behavioral",
+        "weightWriter": 0,
+        "weightSenior": 20,
+        "criteria": [
+          {
+            "id": "review_development",
+            "name": "تطوير النفس في مراجعة الأعمال",
+            "weight": 50,
+            "anchors": {
+              "5": "يراجع أعمال الفريق بانتظام ويقدّم ملاحظات دقيقة وبنّاءة تُحسّن جودة الأعمال بشكل ملحوظ",
+              "3": "يراجع عند الطلب المباشر فقط، وملاحظاته عامة دون تعمّق كافٍ",
+              "1": "لا يشارك في مراجعة أعمال الفريق رغم الحاجة لذلك"
+            }
+          },
+          {
+            "id": "project_leadership",
+            "name": "قيادة المشاريع",
+            "weight": 50,
+            "anchors": {
+              "5": "يقود مشاريع الفريق من التخطيط حتى التسليم بثقة واستقلالية، ويحل العقبات دون تصعيد دائم",
+              "3": "يقود مهام محدودة النطاق فقط، ويحتاج توجيهًا في القرارات الأكبر",
+              "1": "لم يتولَّ قيادة أي مشروع رغم الفرص المتاحة"
+            }
+          }
+        ]
+      }
+    ],
+    "classification": [
+      {
+        "min": 4.5,
+        "max": 5.0,
+        "label": "استثنائي"
+      },
+      {
+        "min": 3.5,
+        "max": 4.49,
+        "label": "يتجاوز التوقعات"
+      },
+      {
+        "min": 2.5,
+        "max": 3.49,
+        "label": "يواكب التوقعات"
+      },
+      {
+        "min": 1.5,
+        "max": 2.49,
+        "label": "يواكب التوقعات جزئيًا"
+      },
+      {
+        "min": 0.0,
+        "max": 1.49,
+        "label": "لا يواكب التوقعات"
+      }
+    ]
+  },
+  "workLog": [],
+  "behavioralLog": [],
+  "evalScores": [],
+  "auditLog": []
+}
