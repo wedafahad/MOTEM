@@ -268,11 +268,30 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 .print-logo { height: 34px; }
 
 /* ===== إحصاءات مرجعية في سجل الأعمال ===== */
-.stat-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat-tile { background: var(--card-bg); border: var(--border); border-radius: var(--radius); padding: 16px 18px; text-align: center; }
 .stat-tile .stat-num { font-size: 30px; font-weight: 700; }
 .stat-tile .stat-label { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
 @media (max-width: 700px) { .stat-tiles { grid-template-columns: 1fr; } }
+
+/* شرائح صغيرة لعرض تفصيل رقمي مضغوط (نوع الإجراء، إلخ) — بند 3.1 */
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.chip-row .chip { background: var(--mist-tint); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; color: var(--ink-2); }
+.chip-row .chip b { color: var(--ink); margin-inline-start: 4px; }
+
+/* تبويبات لوحتي — بند 3.2 */
+.dash-tabs { display: flex; gap: 6px; margin: 14px 0; flex-wrap: wrap; }
+.dash-tab-btn { background: var(--card-bg); border: var(--border); border-radius: 999px; padding: 8px 16px; font-size: 13.5px; cursor: pointer; color: var(--ink-2); }
+.dash-tab-btn.active { background: var(--ink); color: var(--card-bg); font-weight: 700; }
+.dash-tab-panel { display: none; }
+.dash-tab-panel.active { display: block; }
+
+/* موظف الربع الماضي — بند 3.3 */
+.top-performer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.top-performer-card { background: var(--card-bg); border: var(--border); border-radius: var(--radius); padding: 16px 18px; }
+.top-performer-card .tp-label { font-size: 12.5px; color: var(--ink-2); margin-bottom: 6px; }
+.top-performer-card .tp-name { font-size: 18px; font-weight: 700; }
+.top-performer-card .tp-score { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
 
 @media print {
   body * { visibility: hidden; }
@@ -282,4 +301,7 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
   .card { box-shadow: none !important; border: 1px solid #ccc !important; break-inside: avoid; background: #fff !important; }
   .bar-fill { background: #999 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .total-score-classification { background: #eee !important; color: #111 !important; }
+  /* بند 3.2: التبويبات لعرض الشاشة فقط — عند الطباعة/تصدير PDF تظهر كل الأقسام مرة واحدة كما كانت دائمًا */
+  .dash-tabs { display: none !important; }
+  .dash-tab-panel { display: block !important; }
 }

@@ -67,7 +67,16 @@ function computeWorkStats(rows) {
   })).sort((a, b) => b.count - a.count);
   const creativeCount = rows.filter((r) => r.workType === "creative").length;
   const formalCount = rows.filter((r) => r.workType === "formal").length;
-  return { assignedCount, projectsCount, textTypesCount, byCategory, creativeCount, formalCount, revisionsCount };
+  // نوع الإجراء (بند 3.1): كتابة / مراجعة وتدقيق / ترجمة — تُعدّ لكل عمل حسب actionType المسجَّل عليه
+  const actionCounts = {};
+  rows.forEach((r) => {
+    const a = r.actionType || "غير محدد";
+    actionCounts[a] = (actionCounts[a] || 0) + 1;
+  });
+  const byActionType = Object.entries(actionCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  // عدد الأعمال المشتركة (بند 3.1 — يعتمد على حقل isCollaborative من بند 1.2)
+  const collaborativeCount = rows.filter((r) => r.isCollaborative).length;
+  return { assignedCount, projectsCount, textTypesCount, byCategory, creativeCount, formalCount, revisionsCount, byActionType, collaborativeCount };
 }
 
 function categoryRowHtml(c, maxCount) {
@@ -90,6 +99,9 @@ function categoryRowHtml(c, maxCount) {
 function workSummaryHtml(rows, heading) {
   const stats = computeWorkStats(rows);
   const maxCount = Math.max(1, ...stats.byCategory.map((c) => c.count));
+  const actionChipsHtml = stats.byActionType.length
+    ? `<div class="chip-row">${stats.byActionType.map((a) => `<span class="chip">${esc(a.name)} <b>${a.count}</b></span>`).join("")}</div>`
+    : "";
   return `
   <div class="card">
     <h3>${heading || "ملخص سجل الأعمال"} <span class="small-muted">— ${App.quarter}</span></h3>
@@ -97,7 +109,10 @@ function workSummaryHtml(rows, heading) {
       <div class="stat-tile"><div class="stat-num">${fmt1(stats.assignedCount)}</div><div class="stat-label">عدد الأعمال الموكلة${stats.revisionsCount ? " *" : ""}</div></div>
       <div class="stat-tile"><div class="stat-num">${stats.projectsCount}</div><div class="stat-label">عدد المشاريع</div></div>
       <div class="stat-tile"><div class="stat-num">${stats.textTypesCount}</div><div class="stat-label">عدد أنواع النصوص</div></div>
+      <div class="stat-tile"><div class="stat-num">${stats.creativeCount} / ${stats.formalCount}</div><div class="stat-label">نوع الكتابة (إبداعي / رسمي)</div></div>
+      <div class="stat-tile"><div class="stat-num">${stats.collaborativeCount}</div><div class="stat-label">عدد الأعمال المشتركة</div></div>
     </div>
+    ${actionChipsHtml ? `<p class="small-muted" style="margin:12px 0 4px">نوع الإجراء</p>${actionChipsHtml}` : ""}
     ${stats.revisionsCount ? `<p class="small-muted">* يشمل ${stats.revisionsCount} مراجعة لعمل سابق، محتسَبة بقيمة مخفَّضة بدل قيمة كاملة مكررة.</p>` : ""}
     ${stats.byCategory.length ? `
     <p class="small-muted" style="margin-bottom:8px">التوزيع حسب نوع العمل</p>
@@ -668,18 +683,38 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
     </div>
     ${revealValues ? totalCardHtml(row) : ""}
     ${statusNote}
-    ${workRows ? workSummaryHtml(workRows) : ""}
-    <div class="card">
-      <h3>القسم الفني</h3>
-      ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+    <div class="dash-tabs" id="dashTabs">
+      <button class="dash-tab-btn active" data-tab="summary">ملخص الأعمال</button>
+      <button class="dash-tab-btn" data-tab="technical">القسم الفني</button>
+      <button class="dash-tab-btn" data-tab="behavioral">القسم السلوكي والمهاراتي</button>
     </div>
-    <div class="card">
-      <h3>القسم السلوكي والمهاراتي</h3>
-      ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+    <div class="dash-tab-panel active" data-panel="summary">
+      ${workRows ? workSummaryHtml(workRows) : ""}
     </div>
-    ${revealValues && row.comments ? `<div class="card"><h3>ملاحظات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
+    <div class="dash-tab-panel" data-panel="technical">
+      <div class="card">
+        <h3>القسم الفني</h3>
+        ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+      </div>
+    </div>
+    <div class="dash-tab-panel" data-panel="behavioral">
+      <div class="card">
+        <h3>القسم السلوكي والمهاراتي</h3>
+        ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+      </div>
+      ${revealValues && row.comments ? `<div class="card"><h3>ملاحظات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
+    </div>
   </div>`;
   document.getElementById("exportPdfBtn").onclick = () => window.print();
+  const tabsWrap = document.getElementById("dashTabs");
+  if (tabsWrap) {
+    tabsWrap.querySelectorAll(".dash-tab-btn").forEach((btn) => {
+      btn.onclick = () => {
+        tabsWrap.querySelectorAll(".dash-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        el.querySelectorAll(".dash-tab-panel").forEach((p) => p.classList.toggle("active", p.dataset.panel === btn.dataset.tab));
+      };
+    });
+  }
 }
 
 function totalCardHtml(row) {
@@ -1095,6 +1130,36 @@ document.addEventListener("input", (e) => {
 });
 
 /* =========================== إدارة: نظرة عامة =========================== */
+/** مجموع فرعي مرجّح (فني أو سلوكي فقط) من pillarScores لتقييم واحد — يعيد null إن كانت التفاصيل غير متاحة (تقييم مُصفّى/redacted) أو غير مكتملة. */
+function categorySubtotal(row, employee, settings, category) {
+  if (!row || !row.pillarScores) return null;
+  const level = employee.level === "senior" ? "senior" : "writer";
+  const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
+  let weightedSum = 0, weightTotal = 0;
+  settings.pillars.forEach((p) => {
+    const w = p[weightKey] || 0;
+    if (w === 0) return;
+    const isBehavioral = p.category === "behavioral";
+    if ((category === "behavioral") !== isBehavioral) return;
+    const pr = row.pillarScores[p.id];
+    const score = pr && pr.pillarScore;
+    if (score === null || score === undefined) return;
+    weightedSum += score * w;
+    weightTotal += w;
+  });
+  return weightTotal > 0 ? weightedSum / weightTotal : null;
+}
+
+/** بند 3.3 — "موظف الربع الماضي": الأفضل حسب 3 معايير منفصلة (فني/سلوكي/مجموع)، من تقييمات مُعتمَدة فقط لربع محدَّد. */
+function topPerformerCardHtml(label, best) {
+  if (!best) return `<div class="top-performer-card"><div class="tp-label">${esc(label)}</div><p class="small-muted" style="margin:0">لا تتوفر بيانات كافية</p></div>`;
+  return `<div class="top-performer-card">
+    <div class="tp-label">${esc(label)}</div>
+    <div class="tp-name">${esc(best.name)}</div>
+    <div class="tp-score">${fmt1(best.value)} / 5</div>
+  </div>`;
+}
+
 async function renderAdminOverviewView(el) {
   const s = App.session;
   const [employees, evalRows] = await Promise.all([
@@ -1102,9 +1167,45 @@ async function renderAdminOverviewView(el) {
     Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
   ]);
   const writers = employees.filter((e) => e.isWriter);
+
+  // موظف الربع الماضي (بند 3.3) — دائمًا للربع السابق فعليًا بغض النظر عن الربع المختار بالجدول أسفله
+  const prevQuarter = Store.quarterOptions()[1];
+  const prevEvalRows = prevQuarter
+    ? await Api.call("listEval", { auth: authOf(s), payload: { quarter: prevQuarter } })
+    : [];
+  const approvedPrev = prevEvalRows.filter((e) => e.status === "approved");
+  const withEmployee = approvedPrev.map((ev) => ({ ev, emp: writers.find((w) => w.id === ev.employeeId) })).filter((x) => x.emp);
+  const pickBest = (valueFn) => {
+    let best = null;
+    withEmployee.forEach(({ ev, emp }) => {
+      const value = valueFn(ev, emp);
+      if (value === null || value === undefined) return;
+      if (!best || value > best.value) best = { name: emp.name, value };
+    });
+    return best;
+  };
+  const bestTechnical = pickBest((ev, emp) => categorySubtotal(ev, emp, App.settings, "technical"));
+  const bestBehavioral = pickBest((ev, emp) => categorySubtotal(ev, emp, App.settings, "behavioral"));
+  const bestOverall = pickBest((ev) => (ev.totalScore === null || ev.totalScore === undefined ? null : ev.totalScore));
+  const detailUnavailable = withEmployee.length > 0 && !bestTechnical && !bestBehavioral;
+
+  const topPerformersHtml = !prevQuarter ? "" : `
+  <div class="card">
+    <h3>موظف الربع الماضي <span class="small-muted">— ${esc(prevQuarter)}</span></h3>
+    ${!withEmployee.length
+      ? `<p class="small-muted">لا توجد تقييمات مُعتمَدة لهذا الربع بعد.</p>`
+      : `<div class="top-performer-grid">
+          ${topPerformerCardHtml("الأعلى فنيًا", bestTechnical)}
+          ${topPerformerCardHtml("الأعلى سلوكيًا", bestBehavioral)}
+          ${topPerformerCardHtml("الأعلى كمجموع", bestOverall)}
+        </div>
+        ${detailUnavailable ? `<p class="small-muted">تفصيل الفني/السلوكي غير متاح لهذا الحساب — الإدارة العامة ترى الدرجة الإجمالية فقط، حفاظًا على خصوصية التقييم.</p>` : ""}`}
+  </div>`;
+
   el.innerHTML = `
   <div class="flex-between"><h2>نظرة عامة — ${App.quarter}</h2>
   <select id="qSel2">${Store.quarterOptions().map((q) => `<option ${q === App.quarter ? "selected" : ""}>${q}</option>`).join("")}</select></div>
+  ${topPerformersHtml}
   <p class="small-muted">تعرض الإدارة الحالة والدرجة الإجمالية فقط، دون تفاصيل المعايير أو تعليقات المقيّم، حفاظًا على خصوصية التقييم.</p>
   <div class="card"><div class="table-wrap"><table>
     <thead><tr><th>الاسم</th><th>المستوى</th><th>المقيّم</th><th>الحالة</th><th>الدرجة</th><th>التصنيف</th></tr></thead>
