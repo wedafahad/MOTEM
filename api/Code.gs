@@ -18,7 +18,7 @@ const SHEET_NAMES = {
 
 const HEADERS = {
   Employees: ["id", "name", "isWriter", "isEvaluator", "level", "specialty", "managerId",
-    "writerCode", "evaluatorCode", "active", "createdAt", "updatedAt"],
+    "writerCode", "evaluatorCode", "active", "createdAt", "updatedAt", "canFinalApprove"],
   WorkLog: ["id", "employeeId", "title", "workType", "quarter", "date", "project", "workCategory", "customCategory", "actionType",
     "isRevision", "revisionOfWorkId",
     "delivered", "onTime", "firstDraftAccepted", "contentRevisionRounds", "scopeRevisionRounds", "collaboratorsJSON",
@@ -55,8 +55,24 @@ function getSheet_(name) {
     sheet = ss.insertSheet(name);
     sheet.appendRow(HEADERS[name]);
     sheet.setFrozenRows(1);
+    return sheet;
   }
+  ensureHeaders_(sheet, HEADERS[name] || []);
   return sheet;
+}
+
+/** ترقية آمنة للأوراق الموجودة مسبقًا: أي عمود أُضيف لاحقًا إلى HEADERS (كـ canFinalApprove) ولم يكن
+ * موجودًا فعليًا في صف العناوين بالشيت يُضاف تلقائيًا في نهاية الصف — بلا مساس بالأعمدة/البيانات الحالية.
+ * بدون هذا، upsertRow_ يكتب بعدد أعمدة HEADERS بينما readAll_ يقرأ عناوين الأعمدة من الشيت الفعلي،
+ * فيضيع أي عمود جديد بصمت (يُقرأ باسم "" بدل اسمه الصحيح). */
+function ensureHeaders_(sheet, expectedHeaders) {
+  if (!expectedHeaders.length) return;
+  const lastCol = sheet.getLastColumn();
+  const currentHeaders = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  const missing = expectedHeaders.filter((h) => currentHeaders.indexOf(h) === -1);
+  if (missing.length) {
+    sheet.getRange(1, currentHeaders.length + 1, 1, missing.length).setValues([missing]);
+  }
 }
 
 function rowToObject_(sheetName, headers, rowValues) {
@@ -490,10 +506,20 @@ function handleApproveEval_(actor, payload) {
   const row = findOne_(SHEET_NAMES.EVAL, (r) => r.id === payload.id);
   if (!row) throw new ApiError("التقييم غير موجود", 404);
   let allowed = false, actorName = "";
-  if (actor.isAdmin) { allowed = true; actorName = "الإدارة"; }
-  else if (actor.asEvaluator) {
+  if (actor.isAdmin) {
+    allowed = true; actorName = "الإدارة";
+  } else if (actor.isOrgAdmin) {
+    // المدير (أعلى الهرم) يعتمد أي تقييم مباشرة — بما فيها تقييمات موظفيه المباشرين، حيث لا يوجد
+    // أصلًا "مدير للمقيّم" فوقه ليعتمد بالطريقة القديمة (كان هذا يمنع اعتماد تقييم وداد مثلًا).
+    allowed = true; actorName = actor.employee.name;
+  } else if (actor.asEvaluator) {
     const evaluator = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === row.evaluatorId);
-    if (evaluator && evaluator.managerId === actor.employee.id) { allowed = true; actorName = actor.employee.name; }
+    if (evaluator && evaluator.managerId === actor.employee.id) {
+      allowed = true; actorName = actor.employee.name;
+    } else if (row.evaluatorId === actor.employee.id && actor.employee.canFinalApprove) {
+      // تفويض صريح من المدير (Employee.canFinalApprove) — مقيّم يعتمد تقييمات فريقه بنفسه دون العودة لمديره
+      allowed = true; actorName = actor.employee.name;
+    }
   }
   if (!allowed) throw new ApiError("لا تملك صلاحية اعتماد هذا التقييم", 403);
   row.status = "approved"; row.approvedBy = actorName; row.approvedAt = nowIso();

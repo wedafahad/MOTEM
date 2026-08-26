@@ -214,17 +214,23 @@ function navItemsFor(session) {
     ];
   }
   if (session.role === "evaluator") {
-    const items = [["team", "فريقي"], ["evaluate", "التقييم"], ["worklog", "سجل الأعمال"]];
-    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["dashboard", "لوحتي"]);
+    const isTopManager = !session.employee.managerId;
+    // "لوحتي" أول عنصر دائمًا لمن يملك صفة كاتب — طلب صريح لتصبح نقطة الدخول الأولى بصريًا لا فقط افتراضيًا
+    const items = session.asWriter ? [["dashboard", "لوحتي"]] : [];
+    items.push(["team", "فريقي"], ["evaluate", "التقييم"]);
+    // "سجل الأعمال" هنا يعرض فريقك المباشر فقط — للمدير (أعلى الهرم) هذا مُتضمَّن بالكامل أصلًا في
+    // "سجل أعمال الموظفين" الأشمل بالأسفل (كل الكتّاب)، فيُستبعَد له تحديدًا تفاديًا للتكرار.
+    if (!isTopManager) items.push(["worklog", "سجل الأعمال"]);
+    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"]);
     // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية.
-    if (!session.employee.managerId) {
+    if (isTopManager) {
       items.push(["overview", "نظرة عامة"], ["employees", "الموظفون"], ["admin-worklog", "سجل أعمال الموظفين"],
         ["settings", "المعايير والأوزان"], ["audit", "سجل التعديلات"]);
     }
     items.push(["export", "التصدير"]);
     return items;
   }
-  return [["worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["dashboard", "لوحتي"]];
+  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"]];
 }
 
 // شاشات "تفاصيل" صالحة لكن غير مدرَجة في القائمة الجانبية (يُفتَح عليها من زر داخل شاشة أخرى، لا من التنقّل المباشر)
@@ -693,12 +699,14 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       ${workRows ? workSummaryHtml(workRows) : ""}
     </div>
     <div class="dash-tab-panel" data-panel="technical">
+      ${pillarsOverviewChartHtml(technical, weightKey, row, revealValues)}
       <div class="card">
         <h3>القسم الفني</h3>
         ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
       </div>
     </div>
     <div class="dash-tab-panel" data-panel="behavioral">
+      ${pillarsOverviewChartHtml(behavioral, weightKey, row, revealValues)}
       <div class="card">
         <h3>القسم السلوكي والمهاراتي</h3>
         ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
@@ -706,7 +714,18 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       ${revealValues && row.comments ? `<div class="card"><h3>ملاحظات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
     </div>
   </div>`;
-  document.getElementById("exportPdfBtn").onclick = () => window.print();
+  document.getElementById("exportPdfBtn").onclick = () => {
+    // فتح كل نوافذ شرح الدرجات (١/٣/٥) قبل الطباعة/تصدير PDF لضمان اكتمال المحتوى المطبوع — بند 3.2
+    const detailsEls = Array.from(el.querySelectorAll(".anchor-details"));
+    const prevOpen = detailsEls.map((d) => d.open);
+    detailsEls.forEach((d) => { d.open = true; });
+    const restore = () => {
+      detailsEls.forEach((d, i) => { d.open = prevOpen[i]; });
+      window.removeEventListener("afterprint", restore);
+    };
+    window.addEventListener("afterprint", restore);
+    window.print();
+  };
   const tabsWrap = document.getElementById("dashTabs");
   if (tabsWrap) {
     tabsWrap.querySelectorAll(".dash-tab-btn").forEach((btn) => {
@@ -742,38 +761,77 @@ function totalCardHtml(row) {
   </div>`;
 }
 
+/** شريط درجة رقمي (1-5) بعلامات مرجعية عند 1/3/5 — رسم بياني بديل عن الأعمدة الجافة (بند 3.2). لون واحد ثابت لأن الطول وحده يحمل القيمة. */
+function scoreBarHtml(score, revealValues) {
+  const has = revealValues && score !== null && score !== undefined;
+  const pct = has ? Math.max(0, Math.min(100, ((score - 1) / 4) * 100)) : 0;
+  return `<div class="score-bar">
+    <div class="score-bar-track">
+      <div class="score-bar-fill" style="width:${pct}%"></div>
+      <span class="score-bar-tick" style="inset-inline-start:0"></span>
+      <span class="score-bar-tick" style="inset-inline-start:50%"></span>
+      <span class="score-bar-tick" style="inset-inline-start:100%"></span>
+    </div>
+    <b class="score-bar-num">${has ? fmt1(score) : "—"}</b>
+  </div>`;
+}
+
+/** نظرة عامة سريعة على كل ركائز القسم (فني/سلوكي) كرسم بياني واحد قبل التفاصيل — بند 3.2. */
+function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues) {
+  if (!pillars.length) return "";
+  return `<div class="card pillar-chart">
+    <h3>نظرة عامة</h3>
+    ${pillars.map((p) => {
+      const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
+      const pillarScore = revealValues ? pr?.pillarScore : null;
+      return `<div class="chart-row">
+        <div class="chart-row-label"><span>${esc(p.name)}</span><span class="small-muted">(${p[weightKey]}%)</span></div>
+        ${scoreBarHtml(pillarScore, revealValues)}
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
 function pillarStructureHtml(p, weightKey, row, revealValues, level) {
   const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
   const pillarScore = revealValues ? pr?.pillarScore : null;
-  const pct = pillarScore ? (pillarScore / 5) * 100 : 0;
   const applicableCriteria = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
   const selfAssessment = row?.selfAssessment || {};
   // عمود "التقييم الذاتي" يظهر فقط إذا كانت هذه الركيزة السلوكية تحمل تقييمًا ذاتيًا لأحد معاييرها (بند 1.5)
   const hasSelfCol = p.category === "behavioral" && applicableCriteria.some((c) => selfAssessment[c.id] !== undefined);
   return `
-  <div class="pillar-row">
-    <div class="pillar-label"><span>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></span><b>${revealValues ? fmt1(pillarScore) : "—"}</b></div>
-    <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-  </div>
-  <table class="struct-table"><thead><tr><th>المعيار</th><th>الوزن</th>${hasSelfCol ? "<th>تقييم الكاتب الذاتي</th>" : ""}<th>تقييم المقيّم</th></tr></thead><tbody>
-  ${applicableCriteria.map((c) => {
-    let weightLabel, score;
-    if (p.id === "quality") {
-      weightLabel = `${c.weightCreative}% إبداعي / ${c.weightFormal}% رسمي`;
-      score = revealValues ? pr?.criteriaAvg?.[c.id] : null;
-    } else {
-      weightLabel = `${c.weight ?? "—"}%`;
-      score = revealValues ? (pr?.criteriaScores?.[c.id] ?? pr?.resolved?.[c.id]) : null;
-    }
-    const hasScore = score !== null && score !== undefined;
-    const selfScore = revealValues ? selfAssessment[c.id] : null;
-    const hasSelfScore = selfScore !== null && selfScore !== undefined;
-    return `<tr><td>${esc(c.name)}${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}</td>
-      <td>${weightLabel}</td>
-      ${hasSelfCol ? `<td>${hasSelfScore ? fmt1(selfScore) : "—"}</td>` : ""}
-      <td><b>${hasScore ? fmt1(score) : "—"}</b></td></tr>`;
-  }).join("")}
-  </tbody></table>`;
+  <div class="pillar-block">
+    <div class="pillar-block-head">
+      <h4>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h4>
+      <b class="pillar-block-score">${revealValues ? fmt1(pillarScore) : "—"}</b>
+    </div>
+    <div class="criterion-list">
+      ${applicableCriteria.map((c) => {
+        let weightLabel, score;
+        if (p.id === "quality") {
+          weightLabel = `${c.weightCreative}% إبداعي / ${c.weightFormal}% رسمي`;
+          score = revealValues ? pr?.criteriaAvg?.[c.id] : null;
+        } else {
+          weightLabel = `${c.weight ?? "—"}%`;
+          score = revealValues ? (pr?.criteriaScores?.[c.id] ?? pr?.resolved?.[c.id]) : null;
+        }
+        const hasScore = score !== null && score !== undefined;
+        const selfScore = revealValues ? selfAssessment[c.id] : null;
+        const hasSelfScore = selfScore !== null && selfScore !== undefined;
+        return `<div class="criterion-card">
+          <div class="criterion-head">
+            <span class="criterion-name">${esc(c.name)}</span>
+            <span class="small-muted criterion-weight">${weightLabel}</span>
+          </div>
+          <div class="criterion-scores">
+            ${hasSelfCol ? `<div class="criterion-score-line"><span class="small-muted">تقييم الكاتب الذاتي</span>${scoreBarHtml(hasSelfScore ? selfScore : null, revealValues)}</div>` : ""}
+            <div class="criterion-score-line"><span class="small-muted">تقييم المقيّم</span>${scoreBarHtml(hasScore ? score : null, revealValues)}</div>
+          </div>
+          ${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
 }
 
 /** أقرب درجة مرجعية (1/3/5) لدرجة فعلية قد تكون كسرية. */
@@ -782,20 +840,36 @@ function nearestAnchor(score) {
   return opts.reduce((a, b) => (Math.abs(b - score) < Math.abs(a - score) ? b : a));
 }
 
-/** دلالة كل درجة من 1-5 لمعيار معيّن، مع تمييز الدرجة التي اختارها المقيّم فعليًا. */
+/** دلالة كل درجة من 1-5 لمعيار معيّن — بنافذة منسدلة تُفتح عند الحاجة بدل عرضها دائمًا لكل معيار (بند 3.2). */
 function anchorLegendHtml(anchors, score) {
   const nearest = score !== null && score !== undefined ? nearestAnchor(score) : null;
-  return `<div class="anchor-legend">${[5, 3, 1].map((n) => {
-    const selected = nearest === n;
-    return `<div class="anchor-chip ${selected ? "chip-selected" : ""}">
-      <span class="score-pill" style="${selected ? "" : "background:transparent;color:var(--ink-3);border:1px solid var(--ink-3)"}">${n}</span>
-      <span>${esc(anchors[String(n)] || "")}</span>
-      ${selected ? `<span class="badge badge-approved" style="margin-inline-start:6px">الاختيار الفعلي</span>` : ""}
-    </div>`;
-  }).join("")}</div>`;
+  return `<details class="anchor-details">
+    <summary>معايير الدرجات (١ / ٣ / ٥)</summary>
+    <div class="anchor-legend">${[5, 3, 1].map((n) => {
+      const selected = nearest === n;
+      return `<div class="anchor-chip ${selected ? "chip-selected" : ""}">
+        <span class="score-pill" style="${selected ? "" : "background:transparent;color:var(--ink-3);border:1px solid var(--ink-3)"}">${n}</span>
+        <span>${esc(anchors[String(n)] || "")}</span>
+        ${selected ? `<span class="badge badge-approved" style="margin-inline-start:6px">الاختيار الفعلي</span>` : ""}
+      </div>`;
+    }).join("")}</div>
+  </details>`;
 }
 
 /* =========================== فريقي (مقيّم) =========================== */
+/** كل من تحت هذا الموظف هرميًا (مباشر وغير مباشر) — نسخة واجهة من downlineIds_ بالخادم. */
+function clientDownlineIds(employees, rootId) {
+  const ids = new Set();
+  const frontier = [rootId];
+  while (frontier.length) {
+    const current = frontier.pop();
+    employees.filter((e) => e.managerId === current).forEach((r) => {
+      if (!ids.has(r.id)) { ids.add(r.id); frontier.push(r.id); }
+    });
+  }
+  return ids;
+}
+
 async function renderTeamView(el) {
   const s = App.session;
   const employees = await Api.call("listEmployees", { auth: authOf(s) });
@@ -805,8 +879,10 @@ async function renderTeamView(el) {
   const extendedTeam = employees.filter((e) => e.isWriter && e.id !== s.employee.id && !directIds.has(e.id));
   const evalRows = await Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } });
 
-  // تقييمات فريق تحت إشراف أعضاء فريقي المباشرين (تدقيق/اعتماد على مستوى ثانٍ) بانتظار اعتمادي
-  const pendingApprovals = evalRows.filter((e) => e.status === "submitted" && e.evaluatorId && e.evaluatorId !== s.employee.id);
+  // تقييمات فريق تحت إشراف أعضاء فريقي المباشرين (تدقيق/اعتماد على مستوى ثانٍ) بانتظار اعتمادي —
+  // مقصورة فعليًا على مقيّمين تحت إشرافي هرميًا (لا أي تقييم مُرسَل بالنظام كله بالخطأ).
+  const myDownlineIds = clientDownlineIds(employees, s.employee.id);
+  const pendingApprovals = evalRows.filter((e) => e.status === "submitted" && e.evaluatorId && e.evaluatorId !== s.employee.id && myDownlineIds.has(e.evaluatorId));
 
   el.innerHTML = `
   <h2>فريقي — ${App.quarter}</h2>
@@ -1311,6 +1387,10 @@ function openEmployeeModal(existing, employees, onSaved) {
     <div class="field"><label>الاسم</label><input type="text" id="f_name" value="${esc(existing?.name || "")}"></div>
     <div class="checkbox-row"><input type="checkbox" id="f_isw" ${existing?.isWriter !== false ? "checked" : ""}><label>كاتب (له سجل أعمال وتقييم)</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_ise" ${existing?.isEvaluator ? "checked" : ""}><label>مقيّم / مدير مباشر (له فريق يقيّمه)</label></div>
+    <div class="checkbox-row" id="f_cfaWrap" style="display:${existing?.isEvaluator ? "flex" : "none"}">
+      <input type="checkbox" id="f_cfa" ${existing?.canFinalApprove ? "checked" : ""}>
+      <label>صلاحية الاعتماد النهائي لتقييمات فريقه مباشرة (دون العودة لمديره)</label>
+    </div>
     <div class="grid grid-2">
       <div class="field"><label>المستوى</label><select id="f_level">
         <option value="writer" ${existing?.level === "writer" ? "selected" : ""}>كاتب</option>
@@ -1331,6 +1411,9 @@ function openEmployeeModal(existing, employees, onSaved) {
   </div>`;
   document.body.appendChild(backdrop);
   backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
+  document.getElementById("f_ise").onchange = (e) => {
+    document.getElementById("f_cfaWrap").style.display = e.target.checked ? "flex" : "none";
+  };
   backdrop.querySelector("#saveModal").onclick = async () => {
     const isWriter = document.getElementById("f_isw").checked;
     const isEvaluator = document.getElementById("f_ise").checked;
@@ -1338,6 +1421,7 @@ function openEmployeeModal(existing, employees, onSaved) {
       id: existing?.id,
       name: document.getElementById("f_name").value.trim(),
       isWriter, isEvaluator,
+      canFinalApprove: isEvaluator ? document.getElementById("f_cfa").checked : false,
       level: isWriter ? document.getElementById("f_level").value : null,
       specialty: isWriter ? document.getElementById("f_spec").value : null,
       managerId: document.getElementById("f_mgr").value || null,

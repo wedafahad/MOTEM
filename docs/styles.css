@@ -257,15 +257,46 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== لوحة التقييم الهيكلية + PDF ===== */
-.struct-table { width: 100%; margin: 6px 0 18px; font-size: 13.5px; }
-.struct-table th { background: var(--mist-tint); }
-.struct-table td:last-child, .struct-table th:last-child { text-align: center; width: 70px; }
 .anchor-legend { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
 .anchor-chip { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); }
 .anchor-chip.chip-selected { background: var(--sage-tint); color: var(--ink); font-weight: 700; }
 .anchor-chip .score-pill { flex-shrink: 0; }
 .print-header { display: none; }
 .print-logo { height: 34px; }
+
+/* شريط درجة رقمي (1-5) بعلامات مرجعية 1/3/5 — رسم بياني بديل عن الجدول الجاف (بند 3.2 — إعادة تصميم لوحتي) */
+.score-bar { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.score-bar-track { position: relative; flex: 1; height: 8px; border-radius: 999px; background: var(--mist); }
+.score-bar-fill { position: absolute; inset-inline-end: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--amber); transition: width .2s ease; }
+.score-bar-tick { position: absolute; top: -2px; width: 1px; height: 12px; background: var(--ink-3); opacity: .45; }
+.score-bar-num { min-width: 30px; text-align: center; font-size: 13px; flex-shrink: 0; }
+
+/* نظرة عامة (رسم بياني) أعلى كل قسم فني/سلوكي في لوحتي — بند 3.2 */
+.pillar-chart .chart-row { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.pillar-chart .chart-row:last-child { margin-bottom: 0; }
+.chart-row-label { width: 42%; min-width: 110px; max-width: 220px; font-size: 13.5px; display: flex; gap: 6px; align-items: baseline; flex-shrink: 0; }
+
+/* بطاقات المعايير — تصميم أنظف بدل الجدول الكثيف (بند 3.2) */
+.pillar-block { margin-bottom: 24px; }
+.pillar-block:last-child { margin-bottom: 0; }
+.pillar-block-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding-bottom: 8px; border-bottom: var(--border); }
+.pillar-block-head h4 { margin: 0; font-size: 15px; }
+.pillar-block-score { font-size: 17px; }
+.criterion-list { display: flex; flex-direction: column; gap: 12px; }
+.criterion-card { background: var(--mist-tint); border-radius: var(--radius-sm); padding: 12px 14px; }
+.criterion-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.criterion-name { font-weight: 700; font-size: 13.5px; }
+.criterion-weight { flex-shrink: 0; }
+.criterion-scores { display: flex; flex-direction: column; gap: 7px; }
+.criterion-score-line { display: flex; align-items: center; gap: 10px; }
+.criterion-score-line > .small-muted { width: 140px; flex-shrink: 0; }
+
+/* شرح الدرجات 1/3/5 كنافذة منسدلة لكل معيار بدل عرض دائم — بند 3.2 */
+.anchor-details { margin-top: 9px; }
+.anchor-details summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); font-weight: 700; }
+.anchor-details summary:hover { color: var(--ink); }
+.anchor-details[open] summary { margin-bottom: 7px; }
+.anchor-details .anchor-legend { margin-top: 0; }
 
 /* ===== إحصاءات مرجعية في سجل الأعمال ===== */
 .stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 18px; }
@@ -300,7 +331,9 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
   .print-eval-sheet { position: absolute; inset: 0; padding: 10mm; background: #fff; color: #111; }
   .print-header { display: flex !important; align-items: center; gap: 16px; margin-bottom: 18px; border-bottom: 2px solid #111; padding-bottom: 10px; }
   .card { box-shadow: none !important; border: 1px solid #ccc !important; break-inside: avoid; background: #fff !important; }
-  .bar-fill { background: #999 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .bar-fill, .score-bar-fill { background: #999 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .anchor-details summary { display: none !important; }
+  .anchor-details .anchor-legend { display: flex !important; }
   .total-score-classification { background: #eee !important; color: #111 !important; }
   /* بند 3.2: التبويبات لعرض الشاشة فقط — عند الطباعة/تصدير PDF تظهر كل الأقسام مرة واحدة كما كانت دائمًا */
   .dash-tabs { display: none !important; }

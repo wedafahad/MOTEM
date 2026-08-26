@@ -407,10 +407,18 @@ def handle_approve_eval(db, actor, payload):
     if actor["isAdmin"]:
         allowed = True
         actor_name = "الإدارة"
+    elif actor.get("isOrgAdmin"):
+        # المدير (أعلى الهرم) يعتمد أي تقييم مباشرة — يحل عدم وجود "مدير للمقيّم" فوقه لاعتماد تقييماته هو
+        allowed = True
+        actor_name = actor["employee"]["name"]
     elif actor["asEvaluator"]:
         me = actor["employee"]
         evaluator = next((e for e in db["employees"] if e["id"] == row.get("evaluatorId")), None)
         if evaluator and evaluator.get("managerId") == me["id"]:
+            allowed = True
+            actor_name = me["name"]
+        elif row.get("evaluatorId") == me["id"] and me.get("canFinalApprove"):
+            # تفويض صريح من المدير — مقيّم يعتمد تقييمات فريقه بنفسه
             allowed = True
             actor_name = me["name"]
     if not allowed:
