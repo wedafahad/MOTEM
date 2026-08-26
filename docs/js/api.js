@@ -1,32 +1,18 @@
-// عميل API — يتحدث مع خادم Apps Script (أو الخادم المحلي أثناء التطوير) عبر نفس العقد.
-// يُخزَّن رابط الخادم فقط (إعداد اتصال) في localStorage تحت مفتاح واحد — لا بيانات عمل هنا إطلاقًا.
+// عميل API — يتحدث مع خادم Apps Script عبر نفس العقد.
+// رابط الخادم ثابت داخل config.js (API_BASE_URL) — لا يُطلب من المستخدم إدخاله ولا يُخزَّن في localStorage.
 
 const Api = (() => {
-  const URL_KEY = "motem_api_url";
-
-  function getApiUrl() {
-    return localStorage.getItem(URL_KEY) || "";
-  }
-  function setApiUrl(url) {
-    localStorage.setItem(URL_KEY, url.trim());
-  }
-  function clearApiUrl() {
-    localStorage.removeItem(URL_KEY);
-  }
-
   async function call(action, { auth, payload } = {}) {
-    const url = getApiUrl();
-    if (!url) throw new Error("لم يتم ضبط رابط الخادم بعد");
     let res;
     try {
-      res = await fetch(url, {
+      res = await fetch(API_BASE_URL, {
         method: "POST",
         // text/plain لتفادي preflight CORS مع Apps Script Web App
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action, auth, payload }),
       });
     } catch (err) {
-      throw new Error("تعذّر الاتصال بالخادم — تحقّقي من الاتصال بالإنترنت ومن رابط الخادم. (" + err.message + ")");
+      throw new Error("تعذّر الاتصال بالخادم — تحقّقي من الاتصال بالإنترنت. (" + err.message + ")");
     }
     if (!res.ok) {
       throw new Error("الخادم أعاد خطأ HTTP " + res.status);
@@ -43,5 +29,5 @@ const Api = (() => {
     return json.data;
   }
 
-  return { getApiUrl, setApiUrl, clearApiUrl, call };
+  return { call };
 })();

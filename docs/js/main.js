@@ -69,7 +69,6 @@ function workSummaryHtml(rows, heading) {
 
 /* =========================== إقلاع التطبيق =========================== */
 async function boot() {
-  if (!Api.getApiUrl()) return renderSetup();
   const session = Store.get();
   if (!session) return renderLogin();
   App.session = session;
@@ -84,36 +83,6 @@ async function boot() {
 function authOf(session) {
   if (session.role === "admin") return { admin: true, password: session.password };
   return { code: session.code };
-}
-
-/* =========================== شاشة الإعداد الأولى =========================== */
-function renderSetup() {
-  $app().innerHTML = `
-  <div class="setup-wrap">
-    <div class="card setup-card">
-      <div class="login-logo"><img src="assets/img/kenayah-logo-black.png" alt="Kenayah"></div>
-      <h2 style="text-align:center">إعداد الاتصال بقاعدة البيانات</h2>
-      <p style="text-align:center">الصقي رابط تطبيق ويب (Web App) الخاص بـ Google Apps Script بعد نشره. راجعي <b>README.md</b> لخطوات النشر كاملة.</p>
-      <div class="field">
-        <label>رابط الخادم (Apps Script Web App URL)</label>
-        <input type="text" id="apiUrlInput" placeholder="https://script.google.com/macros/s/XXXX/exec">
-      </div>
-      <button class="btn btn-primary" style="width:100%" id="saveApiUrl">حفظ ومتابعة</button>
-      <div class="divider"></div>
-      <p class="small-muted" style="text-align:center">للتجربة المحلية فقط أثناء التطوير:</p>
-      <button class="btn" style="width:100%" id="useLocal">استخدام الخادم المحلي (localhost:8787)</button>
-    </div>
-  </div>`;
-  document.getElementById("saveApiUrl").onclick = () => {
-    const v = document.getElementById("apiUrlInput").value.trim();
-    if (!v) return toast("أدخلي الرابط أولًا");
-    Api.setApiUrl(v);
-    boot();
-  };
-  document.getElementById("useLocal").onclick = () => {
-    Api.setApiUrl("http://localhost:8787");
-    boot();
-  };
 }
 
 /* =========================== تسجيل الدخول =========================== */
@@ -135,9 +104,6 @@ function renderLogin(errorMsg) {
         </div>
         <div id="loginFields"></div>
         <button class="btn btn-primary" id="loginBtn" style="width:100%">دخول</button>
-        <div style="margin-top:16px;text-align:center">
-          <button class="icon-btn small-muted" id="resetApi">تغيير رابط الخادم</button>
-        </div>
       </div>
     </div>`;
     const fields = document.getElementById("loginFields");
@@ -150,7 +116,6 @@ function renderLogin(errorMsg) {
     document.querySelectorAll(".role-tabs button").forEach((b) => {
       b.onclick = () => { activeTab = b.dataset.r; draw(); };
     });
-    document.getElementById("resetApi").onclick = () => { Api.clearApiUrl(); renderSetup(); };
     document.getElementById("loginBtn").onclick = () => doLogin(activeTab);
   };
   draw();
