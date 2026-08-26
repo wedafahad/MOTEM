@@ -12,7 +12,7 @@
 
 ```json
 {
-  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword",
+  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer",
   "auth": { "code": "XXXXXX" } ,
   "payload": { }
 }
@@ -61,9 +61,12 @@ selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt`
 - في شاشة/تقرير التقييم النهائي (بعد `status === "approved"`)، لكل معيار سلوكي له `selfAssessment[critId]` تُعرَض قيمتا الكاتب الذاتية وقيمة المقيّم (`pillarScores[pillarId].criteriaScores[critId]`) جنبًا لجنب، لا رقمًا مدمجًا واحدًا.
 
 ### Settings (صف واحد JSON)
-`pillars[], classification[], revisionValueMultiplier` — قابل للتعديل بالكامل من شاشة الإعدادات (إدارة فقط).
+`pillars[], classification[], revisionValueMultiplier, topPerformerPublished` — قابل للتعديل بالكامل من شاشة الإعدادات (إدارة فقط).
 كل ركيزة فيها `category(technical|behavioral)` يحدّد قسمها في لوحة الكاتب، و`weightWriter`/`weightSenior` — الركيزة ذات وزن 0 لمستوى معيّن تُستبعد كليًا (لا تُعرض، لا تُطلب من المقيّم، لا تدخل حساب الاكتمال) لذلك المستوى، كحال ركيزة `leadership` مع الكاتب العادي.
 - ركيزتا `teamwork` (العمل الجماعي — سلوكي) و`info_accuracy` (دقة المعلومات ومصادر موثوقة — فني) مُضافتان بوزن `0/0` افتراضيًا (مرحلة 1) حتى لا تتغيّر درجة أي كاتب تلقائيًا؛ على الإدارة تحديد وزنهما الفعلي من شاشة «المعايير والأوزان» (وعادةً خصم ذلك الوزن من ركيزة أخرى لإبقاء المجموع 100).
+
+## موظف الربع — نشر بالاسم فقط (بديل بند 3.3 للموظفين)
+`publishTopPerformer` (`auth.isOrgAdmin` فقط — إدارة عامة أو مدير) يحسب سيرفريًا، من بيانات EvalScores الكاملة غير المُصفّاة بصرف النظر عن هوية المُستدعي، أفضل ثلاثة (فنيًا/سلوكيًا/كمجموع، بين تقييمات `status === "approved"` فقط لربع مُعطى)، ويخزّن **الاسم فقط بلا أي رقم درجة** في `Settings.topPerformerPublished = { quarter, technical:{employeeId,name}|null, behavioral:{...}|null, overall:{...}|null, publishedBy, publishedAt }`. هذا الحقل يعود ضمن `getSettings` العادي — أي مستخدم مسجَّل دخوله (بما فيهم الكتّاب) يراه، وهذا مقصود: هو "تحفيز" علني بالاسم لا بيانات تقييم سرّية. `unpublishTopPerformer` (نفس الصلاحية) يمسحه (`null`). القرار يدوي بالكامل من واجهة «نظرة عامة» — لا نشر تلقائي عند اعتماد أي تقييم.
 
 ### AuditLog
 `id, timestamp, actorRole, actorName, action, targetType, targetId, details`

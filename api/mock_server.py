@@ -451,6 +451,77 @@ def handle_list_audit(db, actor):
     return list(reversed(db["auditLog"]))
 
 
+def compute_category_subtotal(row, employee, settings, category):
+    """نفس منطق categorySubtotal في docs/js/calc.js — يعمل على بيانات EvalScores الكاملة غير المُصفّاة."""
+    if not row or not row.get("pillarScores"):
+        return None
+    level = "senior" if employee.get("level") == "senior" else "writer"
+    weight_key = "weightSenior" if level == "senior" else "weightWriter"
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for p in settings["pillars"]:
+        w = p.get(weight_key) or 0
+        if w == 0:
+            continue
+        is_behavioral = p.get("category") == "behavioral"
+        if (category == "behavioral") != is_behavioral:
+            continue
+        pr = row["pillarScores"].get(p["id"])
+        score = pr.get("pillarScore") if pr else None
+        if score is None:
+            continue
+        weighted_sum += score * w
+        weight_total += w
+    return weighted_sum / weight_total if weight_total > 0 else None
+
+
+def handle_publish_top_performer(db, actor, payload):
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير ينشران هذا القسم", 403)
+    quarter = payload.get("quarter")
+    if not quarter:
+        raise ApiError("الربع مطلوب", 400)
+    settings = db["settings"]
+    writers_by_id = {e["id"]: e for e in db["employees"] if e.get("isWriter")}
+    eval_rows = [r for r in db["evalScores"] if r.get("quarter") == quarter and r.get("status") == "approved" and r.get("employeeId") in writers_by_id]
+
+    def pick_best(fn):
+        best = None
+        for r in eval_rows:
+            emp = writers_by_id[r["employeeId"]]
+            value = fn(r, emp)
+            if value is None:
+                continue
+            if best is None or value > best["value"]:
+                best = {"employeeId": emp["id"], "name": emp["name"], "value": value}
+        return {"employeeId": best["employeeId"], "name": best["name"]} if best else None  # بالاسم فقط
+
+    actor_name = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
+    result = {
+        "quarter": quarter,
+        "technical": pick_best(lambda r, e: compute_category_subtotal(r, e, settings, "technical")),
+        "behavioral": pick_best(lambda r, e: compute_category_subtotal(r, e, settings, "behavioral")),
+        "overall": pick_best(lambda r, e: r.get("totalScore")),
+        "publishedBy": actor_name,
+        "publishedAt": now_iso(),
+    }
+    settings["topPerformerPublished"] = result
+    audit(db, "admin" if actor["isAdmin"] else "manager", actor_name, "نشر موظف الربع", "System", quarter,
+          " / ".join(filter(None, [result["technical"] and result["technical"]["name"],
+                                    result["behavioral"] and result["behavioral"]["name"],
+                                    result["overall"] and result["overall"]["name"]])))
+    return result
+
+
+def handle_unpublish_top_performer(db, actor):
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير يلغيان النشر", 403)
+    db["settings"]["topPerformerPublished"] = None
+    audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
+          "إلغاء نشر موظف الربع", "System", "-", "")
+    return {"ok": True}
+
+
 ROUTES_NO_AUTH = {"login", "adminLogin"}
 
 
@@ -498,6 +569,10 @@ def dispatch(action, auth, payload):
                 result = handle_change_admin_password(db, actor, payload)
             elif action == "listAudit":
                 result = handle_list_audit(db, actor)
+            elif action == "publishTopPerformer":
+                result = handle_publish_top_performer(db, actor, payload)
+            elif action == "unpublishTopPerformer":
+                result = handle_unpublish_top_performer(db, actor)
             else:
                 raise ApiError(f"إجراء غير معروف: {action}", 400)
         save_db(db)

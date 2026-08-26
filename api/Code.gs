@@ -528,6 +528,74 @@ function handleListAudit_(actor) {
   return readAll_(SHEET_NAMES.AUDIT).reverse();
 }
 
+// ============================= موظف الربع — نشر بالاسم فقط (بديل بند 3.3 للموظفين) =============================
+// نفس منطق categorySubtotal في docs/js/calc.js تمامًا لكن هنا سيرفريًا: يعمل على بيانات EvalScores الكاملة
+// غير المُصفّاة (redactEval_) بصرف النظر عن هوية المُستدعي، لأن النشر لا يكشف أي رقم — الاسم فقط يخرج للخارج.
+function computeCategorySubtotal_(row, employee, settings, category) {
+  if (!row || !row.pillarScores) return null;
+  const level = employee.level === "senior" ? "senior" : "writer";
+  const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
+  let weightedSum = 0, weightTotal = 0;
+  settings.pillars.forEach((p) => {
+    const w = p[weightKey] || 0;
+    if (w === 0) return;
+    const isBehavioral = p.category === "behavioral";
+    if ((category === "behavioral") !== isBehavioral) return;
+    const pr = row.pillarScores[p.id];
+    const score = pr && pr.pillarScore;
+    if (score === null || score === undefined) return;
+    weightedSum += score * w;
+    weightTotal += w;
+  });
+  return weightTotal > 0 ? weightedSum / weightTotal : null;
+}
+
+/** الإدارة العامة أو المدير فقط يقرران النشر — تصريح من الحساب صاحب القرار، لا مجرد عرض بيانات. */
+function handlePublishTopPerformer_(actor, payload) {
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير ينشران هذا القسم", 403);
+  const quarter = payload.quarter;
+  if (!quarter) throw new ApiError("الربع مطلوب", 400);
+  const settings = getSettings_();
+  const writersById = {};
+  readAll_(SHEET_NAMES.EMPLOYEES).forEach((e) => { if (e.isWriter) writersById[e.id] = e; });
+  const evalRows = readAll_(SHEET_NAMES.EVAL).filter((r) => r.quarter === quarter && r.status === "approved" && writersById[r.employeeId]);
+
+  const pickBest = (fn) => {
+    let best = null;
+    evalRows.forEach((r) => {
+      const emp = writersById[r.employeeId];
+      const value = fn(r, emp);
+      if (value === null || value === undefined) return;
+      if (!best || value > best.value) best = { employeeId: emp.id, name: emp.name, value: value };
+    });
+    return best ? { employeeId: best.employeeId, name: best.name } : null; // بالاسم فقط — لا رقم يخرج للنشر العام
+  };
+
+  const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
+  const result = {
+    quarter: quarter,
+    technical: pickBest((r, e) => computeCategorySubtotal_(r, e, settings, "technical")),
+    behavioral: pickBest((r, e) => computeCategorySubtotal_(r, e, settings, "behavioral")),
+    overall: pickBest((r) => (r.totalScore === null || r.totalScore === undefined ? null : r.totalScore)),
+    publishedBy: actorName,
+    publishedAt: nowIso(),
+  };
+  settings.topPerformerPublished = result;
+  setSettings_(settings);
+  audit_(actor.isAdmin ? "admin" : "manager", actorName, "نشر موظف الربع", "System", quarter,
+    [result.technical?.name, result.behavioral?.name, result.overall?.name].filter(Boolean).join(" / "));
+  return result;
+}
+
+function handleUnpublishTopPerformer_(actor) {
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يلغيان النشر", 403);
+  const settings = getSettings_();
+  settings.topPerformerPublished = null;
+  setSettings_(settings);
+  audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "إلغاء نشر موظف الربع", "System", "-", "");
+  return { ok: true };
+}
+
 // ============================= التوزيع (Dispatch) =============================
 
 function dispatch_(action, auth, payload) {
@@ -559,6 +627,8 @@ function dispatch_(action, auth, payload) {
       case "setSettings": data = handleSetSettings_(actor, payload); break;
       case "changeAdminPassword": data = handleChangeAdminPassword_(actor, payload); break;
       case "listAudit": data = handleListAudit_(actor); break;
+      case "publishTopPerformer": data = handlePublishTopPerformer_(actor, payload); break;
+      case "unpublishTopPerformer": data = handleUnpublishTopPerformer_(actor); break;
       default: throw new ApiError("إجراء غير معروف: " + action, 400);
     }
     return { ok: true, data: data };

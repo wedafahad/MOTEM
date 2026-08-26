@@ -651,11 +651,11 @@ async function renderDashboardView(el) {
   ]);
   const row = evalRows[0] || null;
   const revealValues = !!(row && row.status === "approved");
-  renderStructuredDashboard(el, { employee: s.employee, row, revealValues, title: "لوحتي", workRows });
+  renderStructuredDashboard(el, { employee: s.employee, row, revealValues, title: "لوحتي", workRows, showTopPerformerBanner: true });
 }
 
 /** لوحة موحّدة: تعرض بنية كل الركائز والمعايير دائمًا (قسمين: فني/سلوكي)، وتُظهر الدرجات فقط عند revealValues=true. */
-function renderStructuredDashboard(el, { employee, row, revealValues, title, workRows }) {
+function renderStructuredDashboard(el, { employee, row, revealValues, title, workRows, showTopPerformerBanner }) {
   const settings = App.settings;
   const level = employee.level === "senior" ? "senior" : "writer";
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
@@ -681,6 +681,7 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       <div><h2 style="margin:0">${esc(employee.name)} — تقييم ${quarter}</h2>
       <p class="small-muted" style="margin:0">${level === "senior" ? "كاتب أول" : "كاتب"} — ${specialtyLabel(employee.specialty)}</p></div>
     </div>
+    ${showTopPerformerBanner ? topPerformerBannerHtml(App.settings) : ""}
     ${revealValues ? totalCardHtml(row) : ""}
     ${statusNote}
     <div class="dash-tabs" id="dashTabs">
@@ -715,6 +716,20 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       };
     });
   }
+}
+
+/** بانر تقدير للموظفين — بالاسم فقط، بدون أي رقم درجة (نُشر يدويًا من الإدارة/المدير). */
+function topPerformerBannerHtml(settings) {
+  const t = settings?.topPerformerPublished;
+  if (!t || (!t.technical && !t.behavioral && !t.overall)) return "";
+  const lines = [];
+  if (t.technical) lines.push(`🏆 الأعلى فنيًا: <b>${esc(t.technical.name)}</b>`);
+  if (t.behavioral) lines.push(`🏆 الأعلى سلوكيًا: <b>${esc(t.behavioral.name)}</b>`);
+  if (t.overall) lines.push(`🏆 الأعلى كمجموع: <b>${esc(t.overall.name)}</b>`);
+  return `<div class="card top-performer-banner">
+    <h3 style="margin-bottom:8px">تقدير الربع — ${esc(t.quarter)}</h3>
+    <p style="margin:4px 0">${lines.join("<br>")}</p>
+  </div>`;
 }
 
 function totalCardHtml(row) {
@@ -1189,6 +1204,19 @@ async function renderAdminOverviewView(el) {
   const bestOverall = pickBest((ev) => (ev.totalScore === null || ev.totalScore === undefined ? null : ev.totalScore));
   const detailUnavailable = withEmployee.length > 0 && !bestTechnical && !bestBehavioral;
 
+  // النشر للموظفين (تحفيز، بالاسم فقط بلا رقم) — قرار يدوي عائد للإدارة العامة أو المدير، وليس تلقائيًا
+  const published = App.settings.topPerformerPublished;
+  const isPublishedForPrevQuarter = !!(published && published.quarter === prevQuarter);
+  const publishControlsHtml = !withEmployee.length ? "" : `
+    <div class="flex-between" style="margin-top:10px">
+      ${isPublishedForPrevQuarter
+        ? `<span class="badge badge-approved">منشور للفريق بالاسم فقط (بدون درجات)</span>`
+        : `<span class="small-muted">غير منشور للفريق بعد — يظهر لهم بالاسم فقط دون أي رقم.</span>`}
+      <button class="btn ${isPublishedForPrevQuarter ? "btn-ghost" : "btn-primary"}" id="topPerfPublishBtn">
+        ${isPublishedForPrevQuarter ? "إلغاء النشر" : "📣 نشر موظف الربع للفريق"}
+      </button>
+    </div>`;
+
   const topPerformersHtml = !prevQuarter ? "" : `
   <div class="card">
     <h3>موظف الربع الماضي <span class="small-muted">— ${esc(prevQuarter)}</span></h3>
@@ -1199,7 +1227,8 @@ async function renderAdminOverviewView(el) {
           ${topPerformerCardHtml("الأعلى سلوكيًا", bestBehavioral)}
           ${topPerformerCardHtml("الأعلى كمجموع", bestOverall)}
         </div>
-        ${detailUnavailable ? `<p class="small-muted">تفصيل الفني/السلوكي غير متاح لهذا الحساب — الإدارة العامة ترى الدرجة الإجمالية فقط، حفاظًا على خصوصية التقييم.</p>` : ""}`}
+        ${detailUnavailable ? `<p class="small-muted">تفصيل الفني/السلوكي غير متاح لهذا الحساب — الإدارة العامة ترى الدرجة الإجمالية فقط، حفاظًا على خصوصية التقييم.</p>` : ""}
+        ${publishControlsHtml}`}
   </div>`;
 
   el.innerHTML = `
@@ -1217,6 +1246,22 @@ async function renderAdminOverviewView(el) {
     }).join("")}</tbody>
   </table></div></div>`;
   document.getElementById("qSel2").onchange = (e) => { App.quarter = e.target.value; renderAdminOverviewView(el); };
+  const publishBtn = document.getElementById("topPerfPublishBtn");
+  if (publishBtn) {
+    publishBtn.onclick = async () => {
+      try {
+        if (isPublishedForPrevQuarter) {
+          await Api.call("unpublishTopPerformer", { auth: authOf(s) });
+          toast("أُلغي النشر");
+        } else {
+          await Api.call("publishTopPerformer", { auth: authOf(s), payload: { quarter: prevQuarter } });
+          toast("نُشر للفريق بالاسم فقط");
+        }
+        App.settings = await Api.call("getSettings", { auth: authOf(s) });
+        renderAdminOverviewView(el);
+      } catch (err) { toast(err.message); }
+    };
+  }
 }
 
 /* =========================== إدارة: الموظفون =========================== */
