@@ -39,10 +39,11 @@
 ### WorkLog
 `id, employeeId, title, workType(creative|formal), quarter, date, project, workCategory, customCategory, actionType,
 delivered, onTime, firstDraftAccepted, contentRevisionRounds, scopeRevisionRounds, collaborators[{employeeId,sharePercent}],
-isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubType, isCollaborative`
+isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative`
 
 - `workCategory`: أحد الأنواع الثابتة (انظر `WORK_CATEGORIES` في main.js) أو `"أخرى"` مع `customCategory` نصًا حرًا.
-- `"منشورات وسائل التواصل الاجتماعي"` نوع أب مُجمَّع (إنفوجرافيك / تغريدة / كاروسيل / بطاقة رقمية / Gif) — عند اختياره تُطلب قيمة `socialSubType` (أحد الخمسة). في أي تقرير/ملخص "عدد الأعمال حسب النوع" يظهر هذا التصنيف كسطر واحد بعدّاد إجمالي، وعند التوسّع (`<details>`) يظهر تفصيل الأعداد لكل نوع فرعي.
+- `"منشورات وسائل التواصل الاجتماعي"` نوع أب مُجمَّع (إنفوجرافيك / تغريدة / كاروسيل / بطاقة رقمية / Gif). عمل واحد مسجَّل = دفعة كاملة من منشورات مشروع معيّن، يُقيَّمها المقيّم مرة واحدة بمعايير الجودة، وتُطلب لها `socialSubTypes: string[]` (أكثر من نوع فرعي في نفس العمل، مثال: `["إنفوجرافيك","Gif","كاروسيل"]`) و`project` **إجباري** (يُستخدم لتجميع دفعات المشروع الواحد). "عدد أنواع النصوص" يعدّ كل نوع فرعي مستخدَم كنوع مستقل (لا العمل كوحدة واحدة) — عمل واحد بأربعة أنواع فرعية = 4 في هذا المؤشر. في تقرير "عدد الأعمال حسب النوع" يظهر هذا التصنيف كسطر واحد بعدّاد إجمالي (عدد الأعمال/الدفعات)، وعند التوسّع (`<details>`) يظهر عدد الأعمال التي شملت كل نوع فرعي (لا عدد قطع المحتوى الفعلي — الكمية داخل كل نوع لا تُحتسب رقميًا، فقط تُذكر إن لزم في حقل الملاحظات).
+- الحقل القديم `socialSubType` (نص مفرد) باقٍ في الشيت لأسباب تاريخية وغير مستخدَم من الواجهة الحالية — المصدر الفعلي هو `socialSubTypes`.
 - `isCollaborative` (Boolean): هل هذا العمل مشترك بين أكثر من كاتب. حقل مستقل عن `collaborators[]` (الذي يحمل نِسَب التوزيع الفعلية إن استُخدم لاحقًا) — هذا فقط علم نعم/لا يظهر في نموذج تسجيل العمل وسجل الأعمال.
 - `isRevision`/`revisionOfWorkId`: إذا كان هذا العمل مراجعة/تحديثًا لعمل سابق، يُحتسب بقيمة `revisionValueMultiplier` بدل قيمة كاملة في: (أ) مؤشر "عدد الأعمال الموكلة" المرجعي، (ب) متوسط معايير ركيزة الجودة. لا يؤثر على أي مقياس آخر (عدد المشاريع، عدد أنواع النصوص، نسب الانضباط/رضا العميل).
 

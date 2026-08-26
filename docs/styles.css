@@ -195,6 +195,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--amber); out
 .checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .checkbox-row input { width: auto; margin: 0; }
 .checkbox-row label { margin: 0; font-weight: 400; color: var(--ink); }
+.checkbox-row-group { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; margin-bottom: 10px; }
+.checkbox-row-group .checkbox-row { margin-bottom: 4px; }
 
 /* ===== Rubric slider ===== */
 .rubric-item { border: var(--border); border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 12px; background: var(--paper-tint); }

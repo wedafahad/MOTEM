@@ -37,7 +37,17 @@ function computeWorkStats(rows) {
   const projectNames = new Set(rows.map((r) => (r.project || "").trim()).filter(Boolean));
   const projectsCount = projectNames.size || assignedCount;
   const categoryOf = (r) => (r.workCategory === "أخرى" ? r.customCategory : r.workCategory) || "";
-  const textTypes = new Set(rows.map(categoryOf).filter(Boolean));
+  // كل عمل "منشورات وسائل التواصل" يضمّ أكثر من نوع فرعي دفعة واحدة (مثلًا 3 إنفوجرافيك + Gif + كاروسيل لمشروع واحد) —
+  // "عدد أنواع النصوص" يعدّ كل نوع فرعي مستخدَم كنوع مستقل، لا العمل كوحدة واحدة.
+  const textTypes = new Set();
+  rows.forEach((r) => {
+    if (r.workCategory === SOCIAL_PARENT_CATEGORY) {
+      (r.socialSubTypes || []).forEach((t) => textTypes.add(t));
+    } else {
+      const c = categoryOf(r);
+      if (c) textTypes.add(c);
+    }
+  });
   const textTypesCount = textTypes.size;
   const counts = {};
   const socialSubCounts = {};
@@ -45,8 +55,8 @@ function computeWorkStats(rows) {
     const cat = categoryOf(r) || "غير محدد";
     counts[cat] = (counts[cat] || 0) + 1;
     if (cat === SOCIAL_PARENT_CATEGORY) {
-      const sub = r.socialSubType || "غير محدد";
-      socialSubCounts[sub] = (socialSubCounts[sub] || 0) + 1;
+      const subs = r.socialSubTypes && r.socialSubTypes.length ? r.socialSubTypes : ["غير محدد"];
+      subs.forEach((sub) => { socialSubCounts[sub] = (socialSubCounts[sub] || 0) + 1; });
     }
   });
   const byCategory = Object.entries(counts).map(([name, count]) => ({
@@ -325,7 +335,7 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
 
   function rowHtml(r) {
     const categoryLabel = r.workCategory === "أخرى" ? r.customCategory
-      : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubType ? `${r.workCategory} — ${r.socialSubType}`
+      : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubTypes?.length ? `${r.workCategory} — ${r.socialSubTypes.join("، ")}`
       : r.workCategory || "";
     return `<tr data-id="${r.id}">
       <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}
@@ -399,7 +409,7 @@ function openWorkModal(employeeId, existing, onSaved) {
         <option value="formal" ${existing?.workType === "formal" ? "selected" : ""}>مؤسسي/رسمي</option></select></div>
       <div class="field"><label>التاريخ</label><input type="date" id="f_date" value="${existing?.date || new Date().toISOString().slice(0,10)}"></div>
     </div>
-    <div class="field"><label>المشروع (اختياري — لعدّ المشاريع في السجل)</label><input type="text" id="f_project" value="${esc(existing?.project || "")}"></div>
+    <div class="field"><label>المشروع <span id="f_projectHint" class="small-muted">(اختياري — لعدّ المشاريع في السجل)</span></label><input type="text" id="f_project" value="${esc(existing?.project || "")}"></div>
     <div class="grid grid-2">
       <div class="field"><label>نوع العمل</label>
         <select id="f_workCategory">${WORK_CATEGORIES.map((c) => `<option value="${esc(c.name)}" ${existing?.workCategory === c.name ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
@@ -410,8 +420,10 @@ function openWorkModal(employeeId, existing, onSaved) {
       <label>حدّدي نوع العمل (أخرى)</label><input type="text" id="f_customCategory" value="${esc(existing?.workCategory === "أخرى" ? existing?.customCategory || "" : "")}">
     </div>
     <div class="field" id="f_socialSubTypeWrap" style="display:none">
-      <label>حدّدي النوع الدقيق</label>
-      <select id="f_socialSubType">${SOCIAL_SUB_TYPES.map((t) => `<option value="${esc(t)}" ${existing?.socialSubType === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+      <label>الأنواع الدقيقة المشمولة في هذا العمل (اختاري كل ما ينطبق)</label>
+      <div class="checkbox-row-group">
+        ${SOCIAL_SUB_TYPES.map((t) => `<label class="checkbox-row"><input type="checkbox" class="f_socialSubType" value="${esc(t)}" ${existing?.socialSubTypes?.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}
+      </div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="f_isCollaborative" ${existing?.isCollaborative ? "checked" : ""}><label>عمل مشترك (أكثر من كاتب شارك في إنجازه)</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_isRevision" ${existing?.isRevision ? "checked" : ""}><label>هذا العمل مراجعة/تحديث لعمل سابق (يُحتسب بقيمة مخفَّضة في مؤشرات الكمية)</label></div>
@@ -439,12 +451,14 @@ function openWorkModal(employeeId, existing, onSaved) {
   const actionSelect = backdrop.querySelector("#f_actionType");
   const customWrap = backdrop.querySelector("#f_customCategoryWrap");
   const socialSubTypeWrap = backdrop.querySelector("#f_socialSubTypeWrap");
+  const projectHint = backdrop.querySelector("#f_projectHint");
   function refreshActions() {
     const cat = WORK_CATEGORIES.find((c) => c.name === categorySelect.value) || WORK_CATEGORIES[0];
     const prevAction = existing?.actionType;
     actionSelect.innerHTML = cat.actions.map((a) => `<option value="${esc(a)}" ${prevAction === a ? "selected" : ""}>${esc(a)}</option>`).join("");
     customWrap.style.display = categorySelect.value === "أخرى" ? "block" : "none";
     socialSubTypeWrap.style.display = cat.hasSubType ? "block" : "none";
+    projectHint.textContent = cat.hasSubType ? "(إجباري لمنشورات وسائل التواصل — يجمع كل الأنواع تحت اسم مشروع واحد)" : "(اختياري — لعدّ المشاريع في السجل)";
   }
   categorySelect.value = existing?.workCategory && WORK_CATEGORIES.some((c) => c.name === existing.workCategory)
     ? existing.workCategory : WORK_CATEGORIES[0].name;
@@ -489,7 +503,9 @@ function openWorkModal(employeeId, existing, onSaved) {
       project: document.getElementById("f_project").value.trim(),
       workCategory,
       customCategory: workCategory === "أخرى" ? customCategory : "",
-      socialSubType: cat.hasSubType ? document.getElementById("f_socialSubType").value : "",
+      socialSubTypes: cat.hasSubType
+        ? Array.from(backdrop.querySelectorAll(".f_socialSubType:checked")).map((i) => i.value)
+        : [],
       isCollaborative: document.getElementById("f_isCollaborative").checked,
       actionType: actionSelect.value,
       isRevision: isRevisionCb.checked,
@@ -506,7 +522,8 @@ function openWorkModal(employeeId, existing, onSaved) {
     if (!row.title) return toast("العنوان مطلوب");
     if (!row.link) return toast("رابط العمل مطلوب");
     if (row.workCategory === "أخرى" && !row.customCategory) return toast("حدّدي نوع العمل في خانة «أخرى»");
-    if (cat.hasSubType && !row.socialSubType) return toast("حدّدي النوع الدقيق لمنشورات وسائل التواصل");
+    if (cat.hasSubType && !row.socialSubTypes.length) return toast("حدّدي نوعًا فرعيًا واحدًا على الأقل لمنشورات وسائل التواصل");
+    if (cat.hasSubType && !row.project) return toast("اسم المشروع إجباري لمنشورات وسائل التواصل — يجمع كل الأنواع تحت مشروع واحد");
     if (row.isRevision && !row.revisionOfWorkId) return toast("اختاري العمل الأصلي الذي رُوجِع");
     try {
       await Api.call("upsertWork", { auth: authOf(s), payload: { row } });

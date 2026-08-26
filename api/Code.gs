@@ -23,7 +23,7 @@ const HEADERS = {
     "isRevision", "revisionOfWorkId",
     "delivered", "onTime", "firstDraftAccepted", "contentRevisionRounds", "scopeRevisionRounds", "collaboratorsJSON",
     "link", "notes", "createdBy", "createdAt", "updatedAt",
-    "socialSubType", "isCollaborative"],
+    "socialSubType", "isCollaborative", "socialSubTypesJSON"],
   BehavioralLog: ["id", "employeeId", "quarter", "indicator", "description", "date", "loggedBy", "createdAt"],
   EvalScores: ["id", "employeeId", "quarter", "evaluatorId", "status", "pillarScoresJSON",
     "selfAssessmentJSON", "managerAuditJSON", "totalScore", "classification", "approvedBy",
@@ -34,7 +34,7 @@ const HEADERS = {
 };
 
 const JSON_COLUMNS = {
-  WorkLog: { collaboratorsJSON: "collaborators" },
+  WorkLog: { collaboratorsJSON: "collaborators", socialSubTypesJSON: "socialSubTypes" },
   EvalScores: { pillarScoresJSON: "pillarScores", selfAssessmentJSON: "selfAssessment", managerAuditJSON: "managerAudit" },
 };
 
@@ -66,8 +66,8 @@ function rowToObject_(sheetName, headers, rowValues) {
     let v = rowValues[i];
     if (jsonCols[h]) {
       const outKey = jsonCols[h];
-      try { obj[outKey] = v ? JSON.parse(v) : (outKey === "collaborators" ? [] : {}); }
-      catch (e) { obj[outKey] = outKey === "collaborators" ? [] : {}; }
+      try { obj[outKey] = v ? JSON.parse(v) : ((outKey === "collaborators" || outKey === "socialSubTypes") ? [] : {}); }
+      catch (e) { obj[outKey] = (outKey === "collaborators" || outKey === "socialSubTypes") ? [] : {}; }
       return;
     }
     if (v === "") v = null;
@@ -83,7 +83,7 @@ function objectToRow_(sheetName, headers, obj) {
   return headers.map((h) => {
     if (jsonCols[h]) {
       const inKey = jsonCols[h];
-      return JSON.stringify(obj[inKey] !== undefined ? obj[inKey] : (inKey === "collaborators" ? [] : {}));
+      return JSON.stringify(obj[inKey] !== undefined ? obj[inKey] : ((inKey === "collaborators" || inKey === "socialSubTypes") ? [] : {}));
     }
     const v = obj[h];
     if (v === undefined || v === null) return "";
@@ -692,6 +692,27 @@ function migrateSocialCategoriesV2_stage1() {
     updated++;
   });
   Logger.log("تمّ ترحيل " + updated + " عملًا إلى «" + SOCIAL_PARENT + "» (منها " + ambiguous + " يحتاج مراجعة يدوية لتمييز Gif عن البطاقة الرقمية).");
+}
+
+/**
+ * شغّليها مرة واحدة بعد migrateSchemaV2_stage1 (تحديثة الأعمدة الأخيرة) وبعد نشر نسخة الواجهة الجديدة (تعدد الأنواع الفرعية).
+ * تحوّل عمود socialSubType القديم (نوع فرعي واحد كنص) إلى socialSubTypes الجديد (مصفوفة أنواع)، لأي عمل لم تُحدَّث
+ * مصفوفته بعد — سواء كان عملًا رُحِّل بـ migrateSocialCategoriesV2_stage1 أو أُدخل يدويًا بالنسخة السابقة من الواجهة
+ * (النوع الفرعي الواحد). آمنة للتشغيل أكثر من مرة.
+ */
+function migrateSocialSubTypesV2_stage2() {
+  const SOCIAL_PARENT = "منشورات وسائل التواصل الاجتماعي";
+  const rows = readAll_(SHEET_NAMES.WORKLOG);
+  let updated = 0;
+  rows.forEach((r) => {
+    if (r.workCategory !== SOCIAL_PARENT) return;
+    if (r.socialSubTypes && r.socialSubTypes.length) return; // مُحدَّث مسبقًا
+    if (!r.socialSubType) return; // ما فيه شي لترحيله
+    r.socialSubTypes = [r.socialSubType];
+    upsertRow_(SHEET_NAMES.WORKLOG, r);
+    updated++;
+  });
+  Logger.log("تمّ تحويل " + updated + " عملًا من socialSubType (نص واحد) إلى socialSubTypes (مصفوفة).");
 }
 
 function DEFAULT_SETTINGS_() {
