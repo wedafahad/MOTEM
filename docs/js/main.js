@@ -912,7 +912,10 @@ async function renderTeamView(el) {
             <td>${specialtyLabel(r.specialty)}</td>
             <td>${statusBadge(ev?.status)}</td>
             <td>${fmt1(ev?.totalScore)}</td>
-            <td><button class="btn btn-sm eval-go" data-id="${r.id}">فتح التقييم</button></td>
+            <td class="gap-8">
+              <button class="btn btn-sm eval-go" data-id="${r.id}">فتح التقييم</button>
+              <button class="btn btn-sm btn-ghost review-go" data-emp="${r.id}">عرض/تصدير</button>
+            </td>
           </tr>`;
         }).join("") || `<tr><td colspan="6" class="empty-state">لا يوجد أعضاء فريق مباشرين مسجّلين بعد</td></tr>`}
       </tbody>
@@ -1303,15 +1306,22 @@ async function renderAdminOverviewView(el) {
   ${topPerformersHtml}
   <p class="small-muted">تعرض الإدارة الحالة والدرجة الإجمالية فقط، دون تفاصيل المعايير أو تعليقات المقيّم، حفاظًا على خصوصية التقييم.</p>
   <div class="card"><div class="table-wrap"><table>
-    <thead><tr><th>الاسم</th><th>المستوى</th><th>المقيّم</th><th>الحالة</th><th>الدرجة</th><th>التصنيف</th></tr></thead>
+    <thead><tr><th>الاسم</th><th>المستوى</th><th>المقيّم</th><th>الحالة</th><th>الدرجة</th><th>التصنيف</th><th></th></tr></thead>
     <tbody>${writers.map((w) => {
       const ev = evalRows.find((e) => e.employeeId === w.id);
       const manager = employees.find((m) => m.id === w.managerId);
       return `<tr><td>${esc(w.name)}</td><td>${w.level === "senior" ? "كاتب أول" : "كاتب"}</td><td>${esc(manager?.name || "—")}</td>
-      <td>${statusBadge(ev?.status)}</td><td>${fmt1(ev?.totalScore)}</td><td>${esc(ev?.classification || "—")}</td></tr>`;
+      <td>${statusBadge(ev?.status)}</td><td>${fmt1(ev?.totalScore)}</td><td>${esc(ev?.classification || "—")}</td>
+      <td><button class="btn btn-sm review-go" data-emp="${w.id}">عرض/تصدير</button></td></tr>`;
     }).join("")}</tbody>
   </table></div></div>`;
   document.getElementById("qSel2").onchange = (e) => { App.quarter = e.target.value; renderAdminOverviewView(el); };
+  // فتح نفس صفحة "لوحتي" (للعرض والتصدير PDF فقط) لأي موظف — الإدارة العامة ترى نسخة مُلخَّصة بحكم إخفاء تفاصيل التقييم عنها من الخادم أصلًا
+  el.querySelectorAll(".review-go").forEach((b) => (b.onclick = () => {
+    App.reviewTargetId = b.dataset.emp;
+    App.view = "review";
+    renderShell();
+  }));
   const publishBtn = document.getElementById("topPerfPublishBtn");
   if (publishBtn) {
     publishBtn.onclick = async () => {

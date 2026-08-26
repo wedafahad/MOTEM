@@ -330,7 +330,19 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 @media print {
   body * { visibility: hidden; }
   .print-eval-sheet, .print-eval-sheet * { visibility: visible; }
-  .print-eval-sheet { position: absolute; inset: 0; padding: 10mm; background: #fff; color: #111; }
+  /* تثبيت كل ألوان الهوية على قيمها الفاتحة داخل التصدير — بغض النظر عن الوضع الداكن الحالي للتطبيق،
+     لضمان خلفية موحّدة اللون بدل تداخل عناصر داكنة مع بطاقات بيضاء مفروضة */
+  .print-eval-sheet {
+    position: absolute; inset: 0; padding: 10mm; background: #fff; color: #111;
+    --ink: #111111; --ink-2: #585858; --ink-3: #949494;
+    --paper: #ffffff; --paper-tint: #f7f5f4; --mist: #ededf2; --mist-tint: #f2f2f6; --card-bg: #ffffff;
+    --lilac: #c9bff2; --lilac-tint: #e7e2f9; --lilac-shade: #857ea0;
+    --blue: #bfe4ee; --blue-tint: #e2f3f7; --blue-shade: #7e969d;
+    --amber: #efa14c; --amber-tint: #f8d5ae; --amber-shade: #9e6a32;
+    --sage: #ddf1d7; --sage-tint: #f0f9ed; --sage-shade: #929f8e;
+    --danger: #b3452f; --danger-tint: #f6e4e0;
+    --border: 1px solid rgba(17, 17, 17, 0.12); --shadow: none;
+  }
   .print-header { display: flex !important; align-items: center; gap: 16px; margin-bottom: 18px; border-bottom: 2px solid #111; padding-bottom: 10px; }
   .card { box-shadow: none !important; border: 1px solid #ccc !important; break-inside: avoid; background: #fff !important; }
   /* تصدير موجز وملوّن: شرح الدرجات (١/٣/٥) لا يظهر إطلاقًا في PDF، والألوان (الأشرطة والشارات) تُطبع كما هي على الشاشة لا رمادية — بناءً على طلب واضح */
