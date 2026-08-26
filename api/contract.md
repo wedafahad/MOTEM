@@ -12,7 +12,7 @@
 
 ```json
 {
-  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword",
+  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword",
   "auth": { "code": "XXXXXX" } ,
   "payload": { }
 }
@@ -39,9 +39,11 @@
 ### WorkLog
 `id, employeeId, title, workType(creative|formal), quarter, date, project, workCategory, customCategory, actionType,
 delivered, onTime, firstDraftAccepted, contentRevisionRounds, scopeRevisionRounds, collaborators[{employeeId,sharePercent}],
-isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt`
+isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubType, isCollaborative`
 
-- `workCategory`: أحد 23 نوعًا ثابتًا (انظر `WORK_CATEGORIES` في main.js) أو `"أخرى"` مع `customCategory` نصًا حرًا.
+- `workCategory`: أحد الأنواع الثابتة (انظر `WORK_CATEGORIES` في main.js) أو `"أخرى"` مع `customCategory` نصًا حرًا.
+- `"منشورات وسائل التواصل الاجتماعي"` نوع أب مُجمَّع (إنفوجرافيك / تغريدة / كاروسيل / بطاقة رقمية / Gif) — عند اختياره تُطلب قيمة `socialSubType` (أحد الخمسة). في أي تقرير/ملخص "عدد الأعمال حسب النوع" يظهر هذا التصنيف كسطر واحد بعدّاد إجمالي، وعند التوسّع (`<details>`) يظهر تفصيل الأعداد لكل نوع فرعي.
+- `isCollaborative` (Boolean): هل هذا العمل مشترك بين أكثر من كاتب. حقل مستقل عن `collaborators[]` (الذي يحمل نِسَب التوزيع الفعلية إن استُخدم لاحقًا) — هذا فقط علم نعم/لا يظهر في نموذج تسجيل العمل وسجل الأعمال.
 - `isRevision`/`revisionOfWorkId`: إذا كان هذا العمل مراجعة/تحديثًا لعمل سابق، يُحتسب بقيمة `revisionValueMultiplier` بدل قيمة كاملة في: (أ) مؤشر "عدد الأعمال الموكلة" المرجعي، (ب) متوسط معايير ركيزة الجودة. لا يؤثر على أي مقياس آخر (عدد المشاريع، عدد أنواع النصوص، نسب الانضباط/رضا العميل).
 
 ### BehavioralLog
@@ -49,11 +51,16 @@ isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt`
 
 ### EvalScores
 `id, employeeId, quarter, evaluatorId, status(draft|submitted|approved), pillarScores{pillarId:{criteriaScores:{critId:score}, comment}},
-selfAssessment{critId:score}, managerAudit{critId:score, note}, totalScore, classification, approvedBy, approvedAt, comments, createdAt, updatedAt`
+selfAssessment{critId:score}, managerAudit{critId:score, note}, totalScore, classification, approvedBy, approvedAt, comments, createdAt, updatedAt,
+selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt`
+
+- **آلية التقييم الذاتي**: الكاتب يحفظ تقييمه الذاتي حفظًا قابلًا للتعديل عبر `upsertSelfAssessment` ما دام `selfAssessmentStatus != "submitted"`. الحدث الذي يُقفله نهائيًا هو فعل الكاتب نفسه: استدعاء `submitSelfAssessment` (زر "اعتماد تقييمي الذاتي" في الواجهة) — بعده يرفض الخادم أي `upsertSelfAssessment` لاحق لنفس الربع. قبل الاعتماد، لا يرى المقيّم قيم `selfAssessment` إطلاقًا (يعود فارغًا `{}` من `listEval`)؛ بعد الاعتماد يظهر كاملًا. هذا منفصل تمامًا عن `status`/`approveEval` (اعتماد المقيّم لتقييمه هو ككل).
+- في شاشة/تقرير التقييم النهائي (بعد `status === "approved"`)، لكل معيار سلوكي له `selfAssessment[critId]` تُعرَض قيمتا الكاتب الذاتية وقيمة المقيّم (`pillarScores[pillarId].criteriaScores[critId]`) جنبًا لجنب، لا رقمًا مدمجًا واحدًا.
 
 ### Settings (صف واحد JSON)
 `pillars[], classification[], revisionValueMultiplier` — قابل للتعديل بالكامل من شاشة الإعدادات (إدارة فقط).
 كل ركيزة فيها `category(technical|behavioral)` يحدّد قسمها في لوحة الكاتب، و`weightWriter`/`weightSenior` — الركيزة ذات وزن 0 لمستوى معيّن تُستبعد كليًا (لا تُعرض، لا تُطلب من المقيّم، لا تدخل حساب الاكتمال) لذلك المستوى، كحال ركيزة `leadership` مع الكاتب العادي.
+- ركيزتا `teamwork` (العمل الجماعي — سلوكي) و`info_accuracy` (دقة المعلومات ومصادر موثوقة — فني) مُضافتان بوزن `0/0` افتراضيًا (مرحلة 1) حتى لا تتغيّر درجة أي كاتب تلقائيًا؛ على الإدارة تحديد وزنهما الفعلي من شاشة «المعايير والأوزان» (وعادةً خصم ذلك الوزن من ركيزة أخرى لإبقاء المجموع 100).
 
 ### AuditLog
 `id, timestamp, actorRole, actorName, action, targetType, targetId, details`

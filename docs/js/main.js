@@ -24,6 +24,10 @@ function esc(s) {
 }
 function fmt1(n) { return n === null || n === undefined ? "—" : (Math.round(n * 100) / 100).toString(); }
 
+// النوع الأب المُجمَّع لمحتوى وسائل التواصل — إنفوجرافيك/تغريدة/كاروسيل/بطاقة رقمية/Gif يندرجون تحته (بند 1.1)
+const SOCIAL_PARENT_CATEGORY = "منشورات وسائل التواصل الاجتماعي";
+const SOCIAL_SUB_TYPES = ["إنفوجرافيك", "تغريدة", "كاروسيل", "بطاقة رقمية", "Gif"];
+
 /** مؤشرات عددية مرجعية من سجل الأعمال — للاطّلاع فقط، لا تُحتسب ضمن التقييم. مُستخدَمة في سجل الأعمال وفي لوحة الكاتب/التصدير. */
 function computeWorkStats(rows) {
   // "مراجعة لعمل سابق" تُحتسب بقيمة مخفَّضة بدل قيمة كاملة مكررة، حتى لا تتضخّم أرقام الإنتاجية بإعادة تسجيل نفس العمل
@@ -36,14 +40,41 @@ function computeWorkStats(rows) {
   const textTypes = new Set(rows.map(categoryOf).filter(Boolean));
   const textTypesCount = textTypes.size;
   const counts = {};
+  const socialSubCounts = {};
   rows.forEach((r) => {
     const cat = categoryOf(r) || "غير محدد";
     counts[cat] = (counts[cat] || 0) + 1;
+    if (cat === SOCIAL_PARENT_CATEGORY) {
+      const sub = r.socialSubType || "غير محدد";
+      socialSubCounts[sub] = (socialSubCounts[sub] || 0) + 1;
+    }
   });
-  const byCategory = Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  const byCategory = Object.entries(counts).map(([name, count]) => ({
+    name, count,
+    subBreakdown: name === SOCIAL_PARENT_CATEGORY
+      ? Object.entries(socialSubCounts).map(([sn, sc]) => ({ name: sn, count: sc })).sort((a, b) => b.count - a.count)
+      : null,
+  })).sort((a, b) => b.count - a.count);
   const creativeCount = rows.filter((r) => r.workType === "creative").length;
   const formalCount = rows.filter((r) => r.workType === "formal").length;
   return { assignedCount, projectsCount, textTypesCount, byCategory, creativeCount, formalCount, revisionsCount };
+}
+
+function categoryRowHtml(c, maxCount) {
+  const bar = `<div class="pillar-row">
+      <div class="pillar-label"><span>${esc(c.name)}</span><b>${c.count}</b></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(c.count / maxCount) * 100}%"></div></div>
+    </div>`;
+  if (!c.subBreakdown || !c.subBreakdown.length) return bar;
+  return `<details class="category-expand">
+    <summary>${bar}</summary>
+    <div class="category-sub-list">
+      ${c.subBreakdown.map((s) => `<div class="pillar-row pillar-row-sub">
+        <div class="pillar-label"><span>${esc(s.name)}</span><b>${s.count}</b></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${(s.count / c.count) * 100}%"></div></div>
+      </div>`).join("")}
+    </div>
+  </details>`;
 }
 
 function workSummaryHtml(rows, heading) {
@@ -60,10 +91,7 @@ function workSummaryHtml(rows, heading) {
     ${stats.revisionsCount ? `<p class="small-muted">* يشمل ${stats.revisionsCount} مراجعة لعمل سابق، محتسَبة بقيمة مخفَّضة بدل قيمة كاملة مكررة.</p>` : ""}
     ${stats.byCategory.length ? `
     <p class="small-muted" style="margin-bottom:8px">التوزيع حسب نوع العمل</p>
-    ${stats.byCategory.map((c) => `<div class="pillar-row">
-      <div class="pillar-label"><span>${esc(c.name)}</span><b>${c.count}</b></div>
-      <div class="bar-track"><div class="bar-fill" style="width:${(c.count / maxCount) * 100}%"></div></div>
-    </div>`).join("")}` : `<p class="small-muted">لا توجد أعمال مسجّلة هذا الربع بعد.</p>`}
+    ${stats.byCategory.map((c) => categoryRowHtml(c, maxCount)).join("")}` : `<p class="small-muted">لا توجد أعمال مسجّلة هذا الربع بعد.</p>`}
   </div>`;
 }
 
@@ -296,9 +324,12 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
   </div>`;
 
   function rowHtml(r) {
+    const categoryLabel = r.workCategory === "أخرى" ? r.customCategory
+      : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubType ? `${r.workCategory} — ${r.socialSubType}`
+      : r.workCategory || "";
     return `<tr data-id="${r.id}">
-      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}
-        <div class="small-muted">${esc(r.workCategory === "أخرى" ? r.customCategory : r.workCategory || "")}${r.actionType ? " — " + esc(r.actionType) : ""}</div></td>
+      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}
+        <div class="small-muted">${esc(categoryLabel)}${r.actionType ? " — " + esc(r.actionType) : ""}</div></td>
       <td><span class="badge ${r.workType === "creative" ? "badge-creative" : "badge-formal"}">${r.workType === "creative" ? "إبداعي" : "رسمي"}</span></td>
       <td>${esc(r.date || "—")}</td>
       <td>${r.delivered ? "✔" : "—"}</td>
@@ -332,14 +363,12 @@ function renderMyWorkLogView(el) { return renderWorkLogView(el, App.session.empl
 // تصنيف أنواع الأعمال — نوع العمل ← أنواع الإجراء المتاحة له
 const WORK_CATEGORIES = [
   { name: "عرض تقديمي", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
-  { name: "الإنفوجرافيك", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
-  { name: "البطاقات الرقمية + Gif", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
+  { name: SOCIAL_PARENT_CATEGORY, actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"], hasSubType: true },
   { name: "التقرير السنوي", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "الحملات الإعلانية", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "السيرة الذاتية", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "تقرير مشروع + متخصص", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "صفحة الهبوط", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
-  { name: "كتابة التغريدات", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "ملفات PDF التفاعلية", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "نص إعلاني", actions: ["كتابة", "مراجعة وتدقيق"] },
   { name: "وصف اليوتيوب", actions: ["كتابة", "مراجعة وتدقيق"] },
@@ -353,7 +382,6 @@ const WORK_CATEGORIES = [
   { name: "خطة لمحتوى مواقع التواصل", actions: ["كتابة", "مراجعة وتدقيق"] },
   { name: "كتابة المقالة (المدونات)", actions: ["كتابة", "مراجعة وتدقيق"] },
   { name: "النشرة البريدية", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
-  { name: "منشورات كاروسيل", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
   { name: "أخرى", actions: ["كتابة", "مراجعة وتدقيق", "ترجمة"] },
 ];
 
@@ -381,6 +409,11 @@ function openWorkModal(employeeId, existing, onSaved) {
     <div class="field" id="f_customCategoryWrap" style="display:none">
       <label>حدّدي نوع العمل (أخرى)</label><input type="text" id="f_customCategory" value="${esc(existing?.workCategory === "أخرى" ? existing?.customCategory || "" : "")}">
     </div>
+    <div class="field" id="f_socialSubTypeWrap" style="display:none">
+      <label>حدّدي النوع الدقيق</label>
+      <select id="f_socialSubType">${SOCIAL_SUB_TYPES.map((t) => `<option value="${esc(t)}" ${existing?.socialSubType === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+    </div>
+    <div class="checkbox-row"><input type="checkbox" id="f_isCollaborative" ${existing?.isCollaborative ? "checked" : ""}><label>عمل مشترك (أكثر من كاتب شارك في إنجازه)</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_isRevision" ${existing?.isRevision ? "checked" : ""}><label>هذا العمل مراجعة/تحديث لعمل سابق (يُحتسب بقيمة مخفَّضة في مؤشرات الكمية)</label></div>
     <div class="field" id="f_revisionOfWrap" style="display:none">
       <label>العمل الأصلي</label><select id="f_revisionOf"><option value="">جارٍ التحميل...</option></select>
@@ -405,11 +438,13 @@ function openWorkModal(employeeId, existing, onSaved) {
   const categorySelect = backdrop.querySelector("#f_workCategory");
   const actionSelect = backdrop.querySelector("#f_actionType");
   const customWrap = backdrop.querySelector("#f_customCategoryWrap");
+  const socialSubTypeWrap = backdrop.querySelector("#f_socialSubTypeWrap");
   function refreshActions() {
     const cat = WORK_CATEGORIES.find((c) => c.name === categorySelect.value) || WORK_CATEGORIES[0];
     const prevAction = existing?.actionType;
     actionSelect.innerHTML = cat.actions.map((a) => `<option value="${esc(a)}" ${prevAction === a ? "selected" : ""}>${esc(a)}</option>`).join("");
     customWrap.style.display = categorySelect.value === "أخرى" ? "block" : "none";
+    socialSubTypeWrap.style.display = cat.hasSubType ? "block" : "none";
   }
   categorySelect.value = existing?.workCategory && WORK_CATEGORIES.some((c) => c.name === existing.workCategory)
     ? existing.workCategory : WORK_CATEGORIES[0].name;
@@ -443,6 +478,7 @@ function openWorkModal(employeeId, existing, onSaved) {
   backdrop.querySelector("#saveModal").onclick = async () => {
     const workCategory = categorySelect.value;
     const customCategory = document.getElementById("f_customCategory").value.trim();
+    const cat = WORK_CATEGORIES.find((c) => c.name === workCategory) || WORK_CATEGORIES[0];
     const row = {
       id: existing?.id,
       employeeId,
@@ -453,6 +489,8 @@ function openWorkModal(employeeId, existing, onSaved) {
       project: document.getElementById("f_project").value.trim(),
       workCategory,
       customCategory: workCategory === "أخرى" ? customCategory : "",
+      socialSubType: cat.hasSubType ? document.getElementById("f_socialSubType").value : "",
+      isCollaborative: document.getElementById("f_isCollaborative").checked,
       actionType: actionSelect.value,
       isRevision: isRevisionCb.checked,
       revisionOfWorkId: isRevisionCb.checked ? (revisionOfSelect.value || null) : null,
@@ -468,6 +506,7 @@ function openWorkModal(employeeId, existing, onSaved) {
     if (!row.title) return toast("العنوان مطلوب");
     if (!row.link) return toast("رابط العمل مطلوب");
     if (row.workCategory === "أخرى" && !row.customCategory) return toast("حدّدي نوع العمل في خانة «أخرى»");
+    if (cat.hasSubType && !row.socialSubType) return toast("حدّدي النوع الدقيق لمنشورات وسائل التواصل");
     if (row.isRevision && !row.revisionOfWorkId) return toast("اختاري العمل الأصلي الذي رُوجِع");
     try {
       await Api.call("upsertWork", { auth: authOf(s), payload: { row } });
@@ -495,21 +534,28 @@ async function renderSelfAssessmentView(el) {
       criteria: p.criteria.filter((c) => c.type !== "ratio" && (!c.appliesToLevel || c.appliesToLevel === level)),
     }))
     .filter((p) => p.criteria.length > 0);
-  const current = (evalRows[0] && evalRows[0].selfAssessment) || {};
+  const row = evalRows[0] || null;
+  const current = (row && row.selfAssessment) || {};
+  const isLocked = row?.selfAssessmentStatus === "submitted";
 
   el.innerHTML = `
   <h2>تقييمي الذاتي — ${App.quarter}</h2>
   <p>هذا تقييمك الشخصي على معايير القسم السلوكي والمهاراتي كاملًا، يراه مقيّمك كمرجع إلى جانب تقييمه. لا يُحتسب مباشرة في الدرجة النهائية.</p>
+  ${isLocked ? `<div class="card empty-state"><p style="font-size:16px">✔ تقييمك الذاتي مُعتمَد ولا يمكن تعديله</p><p class="small-muted">اعتُمد بتاريخ ${row.selfAssessmentSubmittedAt ? new Date(row.selfAssessmentSubmittedAt).toLocaleDateString("ar") : "—"}، وأصبح مرئيًا لمقيّمك الآن.</p></div>` : ""}
   ${behavioralPillars.map((p) => `
     <div class="card">
       <h3>${esc(p.name)}</h3>
-      ${p.criteria.map((c) => rubricSliderHtml(c, current[c.id])).join("")}
+      ${p.criteria.map((c) => rubricSliderHtml(c, current[c.id], isLocked)).join("")}
     </div>`).join("")}
-  <button class="btn btn-primary" id="saveSelf">حفظ تقييمي الذاتي</button>
+  ${isLocked ? "" : `
+  <div class="gap-8">
+    <button class="btn" id="saveSelf">حفظ كمسودة</button>
+    <button class="btn btn-primary" id="submitSelf">اعتماد تقييمي الذاتي (نهائي)</button>
+  </div>`}
   `;
   attachSliderHandlers(el);
 
-  document.getElementById("saveSelf").onclick = async () => {
+  function collectSelfAssessment() {
     const selfAssessment = {};
     behavioralPillars.forEach((p) => {
       p.criteria.forEach((c) => {
@@ -517,18 +563,33 @@ async function renderSelfAssessmentView(el) {
         if (inp) selfAssessment[c.id] = Number(inp.value);
       });
     });
+    return selfAssessment;
+  }
+
+  const saveBtn = document.getElementById("saveSelf");
+  if (saveBtn) saveBtn.onclick = async () => {
     try {
-      await Api.call("upsertSelfAssessment", { auth: authOf(s), payload: { quarter: App.quarter, selfAssessment } });
-      toast("تم حفظ تقييمك الذاتي");
+      await Api.call("upsertSelfAssessment", { auth: authOf(s), payload: { quarter: App.quarter, selfAssessment: collectSelfAssessment() } });
+      toast("تم حفظ تقييمك الذاتي كمسودة");
+    } catch (err) { toast(err.message); }
+  };
+  const submitBtn = document.getElementById("submitSelf");
+  if (submitBtn) submitBtn.onclick = async () => {
+    if (!confirm("بعد الاعتماد لن تتمكني من تعديل تقييمك الذاتي هذا الربع، وسيصبح مرئيًا لمقيّمك. تأكيد الاعتماد؟")) return;
+    try {
+      await Api.call("upsertSelfAssessment", { auth: authOf(s), payload: { quarter: App.quarter, selfAssessment: collectSelfAssessment() } });
+      await Api.call("submitSelfAssessment", { auth: authOf(s), payload: { quarter: App.quarter } });
+      toast("تم اعتماد تقييمك الذاتي");
+      renderSelfAssessmentView(el);
     } catch (err) { toast(err.message); }
   };
 }
 
-function rubricSliderHtml(crit, value) {
+function rubricSliderHtml(crit, value, disabled) {
   const v = value ?? 3;
   return `<div class="rubric-item">
     <div class="rubric-title"><span>${esc(crit.name)}</span><span class="score-pill" data-pill="${crit.id}">${v}</span></div>
-    <input type="range" min="1" max="5" step="0.5" value="${v}" data-crit="${crit.id}">
+    <input type="range" min="1" max="5" step="0.5" value="${v}" data-crit="${crit.id}" ${disabled ? "disabled" : ""}>
     <div class="rubric-anchors">
       <span><b>1</b> — ${esc(crit.anchors?.["1"] || "")}</span>
       <span style="text-align:center"><b>3</b> — ${esc(crit.anchors?.["3"] || "")}</span>
@@ -616,12 +677,15 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level) {
   const pillarScore = revealValues ? pr?.pillarScore : null;
   const pct = pillarScore ? (pillarScore / 5) * 100 : 0;
   const applicableCriteria = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
+  const selfAssessment = row?.selfAssessment || {};
+  // عمود "التقييم الذاتي" يظهر فقط إذا كانت هذه الركيزة السلوكية تحمل تقييمًا ذاتيًا لأحد معاييرها (بند 1.5)
+  const hasSelfCol = p.category === "behavioral" && applicableCriteria.some((c) => selfAssessment[c.id] !== undefined);
   return `
   <div class="pillar-row">
     <div class="pillar-label"><span>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></span><b>${revealValues ? fmt1(pillarScore) : "—"}</b></div>
     <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
   </div>
-  <table class="struct-table"><thead><tr><th>المعيار</th><th>الوزن</th><th>الدرجة</th></tr></thead><tbody>
+  <table class="struct-table"><thead><tr><th>المعيار</th><th>الوزن</th>${hasSelfCol ? "<th>تقييم الكاتب الذاتي</th>" : ""}<th>تقييم المقيّم</th></tr></thead><tbody>
   ${applicableCriteria.map((c) => {
     let weightLabel, score;
     if (p.id === "quality") {
@@ -632,8 +696,12 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level) {
       score = revealValues ? (pr?.criteriaScores?.[c.id] ?? pr?.resolved?.[c.id]) : null;
     }
     const hasScore = score !== null && score !== undefined;
+    const selfScore = revealValues ? selfAssessment[c.id] : null;
+    const hasSelfScore = selfScore !== null && selfScore !== undefined;
     return `<tr><td>${esc(c.name)}${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}</td>
-      <td>${weightLabel}</td><td><b>${hasScore ? fmt1(score) : "—"}</b></td></tr>`;
+      <td>${weightLabel}</td>
+      ${hasSelfCol ? `<td>${hasSelfScore ? fmt1(selfScore) : "—"}</td>` : ""}
+      <td><b>${hasScore ? fmt1(score) : "—"}</b></td></tr>`;
   }).join("")}
   </tbody></table>`;
 }

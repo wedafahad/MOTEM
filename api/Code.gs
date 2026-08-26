@@ -22,11 +22,13 @@ const HEADERS = {
   WorkLog: ["id", "employeeId", "title", "workType", "quarter", "date", "project", "workCategory", "customCategory", "actionType",
     "isRevision", "revisionOfWorkId",
     "delivered", "onTime", "firstDraftAccepted", "contentRevisionRounds", "scopeRevisionRounds", "collaboratorsJSON",
-    "link", "notes", "createdBy", "createdAt", "updatedAt"],
+    "link", "notes", "createdBy", "createdAt", "updatedAt",
+    "socialSubType", "isCollaborative"],
   BehavioralLog: ["id", "employeeId", "quarter", "indicator", "description", "date", "loggedBy", "createdAt"],
   EvalScores: ["id", "employeeId", "quarter", "evaluatorId", "status", "pillarScoresJSON",
     "selfAssessmentJSON", "managerAuditJSON", "totalScore", "classification", "approvedBy",
-    "approvedAt", "comments", "createdAt", "updatedAt"],
+    "approvedAt", "comments", "createdAt", "updatedAt",
+    "selfAssessmentStatus", "selfAssessmentSubmittedAt"],
   Settings: ["key", "value"],
   AuditLog: ["id", "timestamp", "actorRole", "actorName", "action", "targetType", "targetId", "details"],
 };
@@ -385,6 +387,14 @@ function canSeeEvalDetail_(actor, row) {
   return false;
 }
 
+/** الكاتب يرى تقييمه الذاتي دائمًا؛ المقيّم لا يرى تفاصيله إلا بعد أن يعتمده الكاتب (selfAssessmentStatus === "submitted"). */
+function withSelfAssessmentVisibility_(actor, row) {
+  const isOwnerWriter = actor.asWriter && actor.employee && row.employeeId === actor.employee.id;
+  if (isOwnerWriter) return row;
+  if (row.selfAssessmentStatus === "submitted") return row;
+  return { ...row, selfAssessment: {} };
+}
+
 function handleListEval_(actor, payload) {
   let rows = readAll_(SHEET_NAMES.EVAL);
   if (payload.quarter) rows = rows.filter((r) => r.quarter === payload.quarter);
@@ -399,7 +409,7 @@ function handleListEval_(actor, payload) {
     const isOwnerWriter = actor.asWriter && r.employeeId === me.id;
     const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.indexOf(r.employeeId) !== -1);
     if (!isOwnerWriter && !isOwnerEval) return;
-    if (canSeeEvalDetail_(actor, r)) visible.push(r);
+    if (canSeeEvalDetail_(actor, r)) visible.push(withSelfAssessmentVisibility_(actor, r));
     else if (isOwnerWriter) { /* غير معتمد بعد -> لا يظهر إطلاقًا للكاتب */ }
     else visible.push(redactEval_(r));
   });
@@ -431,15 +441,39 @@ function handleUpsertSelfAssessment_(actor, payload) {
   const me = actor.employee;
   const quarter = payload.quarter;
   let existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === me.id && r.quarter === quarter);
+  if (existing && existing.selfAssessmentStatus === "submitted") {
+    throw new ApiError("تقييمك الذاتي مُعتمَد بالفعل ولا يمكن تعديله لهذا الربع", 403);
+  }
   if (!existing) {
     existing = { id: newId(), employeeId: me.id, quarter: quarter, evaluatorId: me.managerId,
       status: "draft", pillarScores: {}, selfAssessment: {}, managerAudit: {},
+      selfAssessmentStatus: "draft", selfAssessmentSubmittedAt: null,
       totalScore: null, classification: null, createdAt: nowIso() };
   }
   existing.selfAssessment = payload.selfAssessment;
   existing.updatedAt = nowIso();
   upsertRow_(SHEET_NAMES.EVAL, existing);
   audit_("writer", me.name, "تحديث التقييم الذاتي", "EvalScores", existing.id, "");
+  return existing;
+}
+
+/** يقفل التقييم الذاتي نهائيًا لهذا الربع — بعدها لا يقبل upsertSelfAssessment أي تعديل، ويصبح مرئيًا كاملًا للمقيّم. */
+function handleSubmitSelfAssessment_(actor, payload) {
+  if (!actor.asWriter) throw new ApiError("فقط الكاتب يعتمد تقييمه الذاتي", 403);
+  const me = actor.employee;
+  const quarter = payload.quarter;
+  const existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === me.id && r.quarter === quarter);
+  if (!existing || !existing.selfAssessment || !Object.keys(existing.selfAssessment).length) {
+    throw new ApiError("سجّلي تقييمك الذاتي أولًا قبل الاعتماد", 400);
+  }
+  if (existing.selfAssessmentStatus === "submitted") {
+    throw new ApiError("تقييمك الذاتي مُعتمَد بالفعل", 400);
+  }
+  existing.selfAssessmentStatus = "submitted";
+  existing.selfAssessmentSubmittedAt = nowIso();
+  existing.updatedAt = nowIso();
+  upsertRow_(SHEET_NAMES.EVAL, existing);
+  audit_("writer", me.name, "اعتماد التقييم الذاتي", "EvalScores", existing.id, "");
   return existing;
 }
 
@@ -510,6 +544,7 @@ function dispatch_(action, auth, payload) {
       case "listEval": data = handleListEval_(actor, payload); break;
       case "upsertEval": data = handleUpsertEval_(actor, payload); break;
       case "upsertSelfAssessment": data = handleUpsertSelfAssessment_(actor, payload); break;
+      case "submitSelfAssessment": data = handleSubmitSelfAssessment_(actor, payload); break;
       case "approveEval": data = handleApproveEval_(actor, payload); break;
       case "getSettings": data = handleGetSettings_(); break;
       case "setSettings": data = handleSetSettings_(actor, payload); break;
@@ -585,6 +620,78 @@ function setupInitialData() {
   Logger.log("كلمة مرور الإدارة: " + adminPassword);
   team.forEach((e) => Logger.log(e.name + " -> كاتب: " + (e.writerCode || "-") + " / مقيّم: " + (e.evaluatorCode || "-")));
   Logger.log("انسخي هذه الأكواد الآن — لن تظهر لك مجددًا هنا إلا عبر Logger أو شاشة «الموظفون» في التطبيق بصلاحية الإدارة.");
+}
+
+/**
+ * شغّليها مرة واحدة يدويًا من محرر Apps Script بعد لصق هذا الإصدار من الكود على شيت "متم" الحيّ القائم فعلًا
+ * (فيه بيانات سابقة) — تُحدِّث بنية الشيت والإعدادات لتطابق «مرحلة 1 — بنية البيانات» دون المساس بأي بيانات موجودة:
+ *  1) تُضيف أعمدة الرأس الجديدة الناقصة في WorkLog و EvalScores في نهاية الصف الأول (لا تُدرَج في المنتصف أبدًا).
+ *  2) تُضيف الركيزتين الجديدتين (العمل الجماعي / دقة المعلومات ومصادر موثوقة) لإعدادات الشيت الحالية بوزن 0،
+ *     دون لمس أي ركيزة أو معيار أو وزن موجود مسبقًا.
+ * آمنة للتشغيل أكثر من مرة (idempotent) — لا تُكرّر إضافة عمود أو ركيزة موجودة بالفعل.
+ */
+function migrateSchemaV2_stage1() {
+  ["WorkLog", "EvalScores"].forEach((sheetName) => {
+    const sheet = getSheet_(sheetName);
+    const width = sheet.getLastColumn();
+    const currentHeaders = width > 0 ? sheet.getRange(1, 1, 1, width).getValues()[0] : [];
+    const targetHeaders = HEADERS[sheetName];
+    const missing = targetHeaders.slice(currentHeaders.length);
+    if (missing.length) {
+      sheet.getRange(1, currentHeaders.length + 1, 1, missing.length).setValues([missing]);
+      Logger.log(sheetName + ": أُضيفت أعمدة جديدة -> " + missing.join(", "));
+    } else {
+      Logger.log(sheetName + ": لا أعمدة ناقصة، لا شيء للتحديث.");
+    }
+  });
+
+  const settings = getSettings_();
+  const defaults = DEFAULT_SETTINGS_();
+  const existingIds = settings.pillars.map((p) => p.id);
+  let added = [];
+  defaults.pillars.forEach((p) => {
+    if (existingIds.indexOf(p.id) === -1) { settings.pillars.push(p); added.push(p.id); }
+  });
+  if (added.length) {
+    setSettings_(settings);
+    Logger.log("أُضيفت ركائز جديدة إلى الإعدادات -> " + added.join(", ") + " (بوزن 0 — عدّليه من شاشة «المعايير والأوزان»)");
+  } else {
+    Logger.log("لا ركائز ناقصة في الإعدادات، لا شيء للتحديث.");
+  }
+  Logger.log("=== تمّت ترقية بنية الشيت والإعدادات إلى مرحلة 1 بنجاح ===");
+}
+
+/**
+ * شغّليها مرة واحدة بعد migrateSchemaV2_stage1 (وبعد نشر نسخة الواجهة الجديدة) لتحديث أعمال WorkLog القديمة
+ * المسجَّلة قبل الدمج تحت "منشورات وسائل التواصل الاجتماعي" الجديد، بدل بقائها بأسماء الأنواع القديمة المتفرّقة.
+ * ملاحظة: "البطاقات الرقمية + Gif" كانت نوعًا واحدًا مدمجًا سابقًا، فلا يمكن تلقائيًا معرفة أيّ الأعمال القديمة
+ * كانت "بطاقة رقمية" وأيها "Gif" فعليًا — تُنقَل جميعها مبدئيًا إلى "بطاقة رقمية" مع ملاحظة، وعلى الكاتب/الإدارة
+ * تصحيح ما كان منها "Gif" فعليًا يدويًا من شاشة سجل الأعمال عند الحاجة.
+ */
+function migrateSocialCategoriesV2_stage1() {
+  const SOCIAL_PARENT = "منشورات وسائل التواصل الاجتماعي";
+  const MAP = {
+    "الإنفوجرافيك": "إنفوجرافيك",
+    "كتابة التغريدات": "تغريدة",
+    "منشورات كاروسيل": "كاروسيل",
+    "البطاقات الرقمية + Gif": "بطاقة رقمية",
+  };
+  const rows = readAll_(SHEET_NAMES.WORKLOG);
+  let updated = 0, ambiguous = 0;
+  rows.forEach((r) => {
+    const subType = MAP[r.workCategory];
+    if (!subType) return;
+    const wasAmbiguous = r.workCategory === "البطاقات الرقمية + Gif";
+    r.workCategory = SOCIAL_PARENT;
+    r.socialSubType = subType;
+    if (wasAmbiguous) {
+      r.notes = (r.notes ? r.notes + " — " : "") + "تُرحيل تلقائي: كان مصنَّفًا سابقًا ضمن «البطاقات الرقمية + Gif» — تحققي إن كان فعليًا Gif وصححي النوع الفرعي عند الحاجة.";
+      ambiguous++;
+    }
+    upsertRow_(SHEET_NAMES.WORKLOG, r);
+    updated++;
+  });
+  Logger.log("تمّ ترحيل " + updated + " عملًا إلى «" + SOCIAL_PARENT + "» (منها " + ambiguous + " يحتاج مراجعة يدوية لتمييز Gif عن البطاقة الرقمية).");
 }
 
 function DEFAULT_SETTINGS_() {
@@ -673,6 +780,22 @@ function DEFAULT_SETTINGS_() {
             anchors: { "5": "يقود مشاريع الفريق من التخطيط حتى التسليم بثقة واستقلالية، ويحل العقبات دون تصعيد دائم",
               "3": "يقود مهام محدودة النطاق فقط، ويحتاج توجيهًا في القرارات الأكبر",
               "1": "لم يتولَّ قيادة أي مشروع رغم الفرص المتاحة" } },
+        ] },
+      // ركيزتان جديدتان — مرحلة 1 (بنية البيانات). وزنهما 0 عمدًا حتى لا تُغيَّر درجات أي كاتب تلقائيًا؛
+      // الإدارة تحدّد وزنهما الفعلي (ومن أي ركيزة يُخصَم) من شاشة «المعايير والأوزان»، والنصوص أدناه مسودة أولى قابلة للتعديل من نفس الشاشة.
+      { id: "teamwork", name: "العمل الجماعي", type: "rubric_group", category: "behavioral", weightWriter: 0, weightSenior: 0,
+        criteria: [
+          { id: "teamwork_collab", name: "العمل الجماعي", weight: 100,
+            anchors: { "5": "ينسّق بفاعلية مع زملائه على الأعمال المشتركة، يسلّم جزءه في وقته، ويدعم الفريق دون أن يُطلب منه ذلك",
+              "3": "يُنجز جزءه في الأعمال المشتركة عند التنسيق المباشر معه، دون مبادرة إضافية بدعم الفريق",
+              "1": "يتأخر في تسليم جزءه من الأعمال المشتركة أو يتجنّب التنسيق مع بقية الفريق" } },
+        ] },
+      { id: "info_accuracy", name: "دقة المعلومات ومصادر موثوقة", type: "rubric_group", category: "technical", weightWriter: 0, weightSenior: 0,
+        criteria: [
+          { id: "info_accuracy_sources", name: "دقة المعلومات ومصادر موثوقة", weight: 100,
+            anchors: { "5": "كل معلومة/رقم/ادعاء في العمل مدعوم بمصدر موثوق يمكن التحقق منه، دون أي خطأ واقعي",
+              "3": "المعلومات صحيحة عمومًا لكن بعضها دون مصدر موثّق واضح، أو يحتاج تحققًا إضافيًا",
+              "1": "معلومات غير دقيقة أو غير موثّقة تستدعي تصحيحًا قبل النشر" } },
         ] },
     ],
     classification: [
