@@ -697,17 +697,17 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
     </div>
     <div class="dash-tab-panel active" data-panel="summary">
       ${workRows ? workSummaryHtml(workRows) : ""}
+      ${pillarsOverviewChartHtml(technical, weightKey, row, revealValues, "نظرة عامة — القسم الفني")}
+      ${pillarsOverviewChartHtml(behavioral, weightKey, row, revealValues, "نظرة عامة — القسم السلوكي والمهاراتي")}
     </div>
     <div class="dash-tab-panel" data-panel="technical">
-      ${pillarsOverviewChartHtml(technical, weightKey, row, revealValues)}
-      <div class="card">
+      <div class="card pillar-detail-card">
         <h3>القسم الفني</h3>
         ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
       </div>
     </div>
     <div class="dash-tab-panel" data-panel="behavioral">
-      ${pillarsOverviewChartHtml(behavioral, weightKey, row, revealValues)}
-      <div class="card">
+      <div class="card pillar-detail-card">
         <h3>القسم السلوكي والمهاراتي</h3>
         ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
       </div>
@@ -762,15 +762,15 @@ function scoreBarHtml(score, revealValues) {
       <span class="score-bar-tick" style="inset-inline-start:50%"></span>
       <span class="score-bar-tick" style="inset-inline-start:100%"></span>
     </div>
-    <b class="score-bar-num">${has ? fmt1(score) : "—"}</b>
+    <span class="score-bar-num ${has ? "score-bar-num-has" : "score-bar-num-empty"}">${has ? fmt1(score) : "—"}</span>
   </div>`;
 }
 
 /** نظرة عامة سريعة على كل ركائز القسم (فني/سلوكي) كرسم بياني واحد قبل التفاصيل — بند 3.2. */
-function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues) {
+function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading) {
   if (!pillars.length) return "";
   return `<div class="card pillar-chart">
-    <h3>نظرة عامة</h3>
+    <h3>${esc(heading || "نظرة عامة")}</h3>
     ${pillars.map((p) => {
       const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
       const pillarScore = revealValues ? pr?.pillarScore : null;
