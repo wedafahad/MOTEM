@@ -714,18 +714,8 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       ${revealValues && row.comments ? `<div class="card"><h3>ملاحظات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
     </div>
   </div>`;
-  document.getElementById("exportPdfBtn").onclick = () => {
-    // فتح كل نوافذ شرح الدرجات (١/٣/٥) قبل الطباعة/تصدير PDF لضمان اكتمال المحتوى المطبوع — بند 3.2
-    const detailsEls = Array.from(el.querySelectorAll(".anchor-details"));
-    const prevOpen = detailsEls.map((d) => d.open);
-    detailsEls.forEach((d) => { d.open = true; });
-    const restore = () => {
-      detailsEls.forEach((d, i) => { d.open = prevOpen[i]; });
-      window.removeEventListener("afterprint", restore);
-    };
-    window.addEventListener("afterprint", restore);
-    window.print();
-  };
+  // تصدير PDF موجز: شرح الدرجات (١/٣/٥) يبقى مطويًا/مخفيًا في الطباعة، والألوان تُطبع كما هي على الشاشة — بند 3.2
+  document.getElementById("exportPdfBtn").onclick = () => window.print();
   const tabsWrap = document.getElementById("dashTabs");
   if (tabsWrap) {
     tabsWrap.querySelectorAll(".dash-tab-btn").forEach((btn) => {
