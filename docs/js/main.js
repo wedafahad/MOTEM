@@ -201,6 +201,11 @@ function navItemsFor(session) {
   if (session.role === "evaluator") {
     const items = [["team", "فريقي"], ["evaluate", "التقييم"], ["worklog", "سجل الأعمال"]];
     if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["dashboard", "لوحتي"]);
+    // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية.
+    if (!session.employee.managerId) {
+      items.push(["overview", "نظرة عامة"], ["employees", "الموظفون"], ["admin-worklog", "سجل أعمال الموظفين"],
+        ["settings", "المعايير والأوزان"], ["audit", "سجل التعديلات"]);
+    }
     items.push(["export", "التصدير"]);
     return items;
   }
@@ -214,7 +219,8 @@ function renderShell() {
   const s = App.session;
   const nav = navItemsFor(s);
   if (!nav.find((n) => n[0] === App.view) && !DETAIL_VIEWS.includes(App.view)) App.view = nav[0][0];
-  const roleLabel = s.role === "admin" ? "الإدارة العامة" : s.role === "evaluator" ? "مقيّم / مدير مباشر" : "كاتب";
+  const isTopManager = s.role === "evaluator" && !s.employee.managerId;
+  const roleLabel = s.role === "admin" ? "الإدارة العامة" : isTopManager ? "المدير (صلاحيات إدارية موسّعة)" : s.role === "evaluator" ? "مقيّم / مدير مباشر" : "كاتب";
   const name = s.role === "admin" ? "الإدارة" : s.employee.name;
 
   $app().innerHTML = `
@@ -325,7 +331,7 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
   <div class="card">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>العنوان</th><th>النوع</th><th>تاريخ</th><th>تسليم</th><th>بالموعد</th><th>قبول أول مسودة</th><th>جولات تعديل (محتوى/نطاق)</th><th></th></tr></thead>
+      <thead><tr><th>العنوان</th><th>النوع</th><th>تاريخ</th><th>تسليم</th><th>بالموعد</th><th>جولات تعديل (محتوى/نطاق)</th><th></th></tr></thead>
       <tbody>
         ${rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="8" class="empty-state">لا توجد أعمال مسجّلة هذا الربع بعد</td></tr>`}
       </tbody>
@@ -344,7 +350,6 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
       <td>${esc(r.date || "—")}</td>
       <td>${r.delivered ? "✔" : "—"}</td>
       <td>${r.onTime ? "✔" : r.delivered ? "متأخر" : "—"}</td>
-      <td>${r.firstDraftAccepted ? "✔" : "—"}</td>
       <td>${r.contentRevisionRounds ?? 0} / ${r.scopeRevisionRounds ?? 0}</td>
       <td class="gap-8">
         <button class="icon-btn edit-w" data-id="${r.id}">تعديل</button>
@@ -432,7 +437,6 @@ function openWorkModal(employeeId, existing, onSaved) {
     </div>
     <div class="checkbox-row"><input type="checkbox" id="f_delivered" ${existing?.delivered !== false ? "checked" : ""}><label>تم التسليم</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_ontime" ${existing?.onTime !== false ? "checked" : ""}><label>سُلِّم في الموعد المحدد</label></div>
-    <div class="checkbox-row"><input type="checkbox" id="f_fda" ${existing?.firstDraftAccepted ? "checked" : ""}><label>قُبلت من أول مسودة (دون تعديل محتوى)</label></div>
     <div class="grid grid-2">
       <div class="field"><label>جولات تعديل «محتوى/جودة»</label><input type="number" min="0" id="f_rev_content" value="${existing?.contentRevisionRounds ?? 0}"></div>
       <div class="field"><label>جولات تعديل «بريف/نطاق» (لا تُحتسب على الكاتب)</label><input type="number" min="0" id="f_rev_scope" value="${existing?.scopeRevisionRounds ?? 0}"></div>
@@ -512,7 +516,6 @@ function openWorkModal(employeeId, existing, onSaved) {
       revisionOfWorkId: isRevisionCb.checked ? (revisionOfSelect.value || null) : null,
       delivered: document.getElementById("f_delivered").checked,
       onTime: document.getElementById("f_ontime").checked,
-      firstDraftAccepted: document.getElementById("f_fda").checked,
       contentRevisionRounds: Number(document.getElementById("f_rev_content").value) || 0,
       scopeRevisionRounds: Number(document.getElementById("f_rev_scope").value) || 0,
       link: document.getElementById("f_link").value.trim(),
@@ -1402,7 +1405,7 @@ async function exportExcel(quarter) {
   const targets = employees.filter((e) => e.isWriter);
 
   const summaryRows = [["الاسم", "المستوى", "التخصص", "الحالة", "الدرجة", "التصنيف"]];
-  const workRowsOut = [["الموظف", "العنوان", "نوع الكتابة", "نوع العمل", "نوع الإجراء", "المشروع", "مراجعة لعمل سابق؟", "التاريخ", "تسليم", "بالموعد", "قبول أول مسودة", "جولات تعديل محتوى", "جولات تعديل نطاق"]];
+  const workRowsOut = [["الموظف", "العنوان", "نوع الكتابة", "نوع العمل", "نوع الإجراء", "المشروع", "مراجعة لعمل سابق؟", "التاريخ", "تسليم", "بالموعد", "جولات تعديل محتوى", "جولات تعديل نطاق"]];
 
   for (const emp of targets) {
     const evalRows = await Api.call("listEval", { auth: authOf(s), payload: { employeeId: emp.id, quarter } });
@@ -1413,7 +1416,7 @@ async function exportExcel(quarter) {
       emp.name, w.title, w.workType === "creative" ? "إبداعي" : "رسمي",
       w.workCategory === "أخرى" ? w.customCategory : (w.workCategory || ""), w.actionType || "", w.project || "",
       w.isRevision ? "نعم" : "لا",
-      w.date, w.delivered ? "نعم" : "لا", w.onTime ? "نعم" : "لا", w.firstDraftAccepted ? "نعم" : "لا",
+      w.date, w.delivered ? "نعم" : "لا", w.onTime ? "نعم" : "لا",
       w.contentRevisionRounds ?? 0, w.scopeRevisionRounds ?? 0,
     ]));
   }

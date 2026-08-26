@@ -75,14 +75,17 @@ def resolve_actor(db, auth):
         settings = db["settings"]
         if auth.get("password") != settings.get("adminPassword"):
             raise ApiError("كلمة مرور الإدارة غير صحيحة", 401)
-        return {"isAdmin": True, "employee": None}
+        return {"isAdmin": True, "isOrgAdmin": True, "employee": None}
     code = auth.get("code")
     emp = find_employee_by_code(db, code)
     if not emp or not emp.get("active", True):
         raise ApiError("الكود غير صحيح أو الحساب غير مُفعّل", 401)
     is_writer = emp.get("isWriter") and emp.get("writerCode") == code
     is_evaluator = emp.get("isEvaluator") and emp.get("evaluatorCode") == code
-    return {"isAdmin": False, "employee": emp, "asWriter": is_writer, "asEvaluator": is_evaluator}
+    # دمج 2.2: أعلى مقيّم في التسلسل الهرمي (بلا مدير فوقه) يكتسب صلاحيات الإدارة العامة
+    # التشغيلية، دون أن يصبح isAdmin=True (حتى لا تنكسر خصوصية تفاصيل التقييمات).
+    is_top_manager = bool(emp.get("isEvaluator") and not emp.get("managerId"))
+    return {"isAdmin": False, "isOrgAdmin": is_top_manager, "employee": emp, "asWriter": is_writer, "asEvaluator": is_evaluator}
 
 
 def direct_reports(db, evaluator_id):
@@ -133,36 +136,39 @@ def handle_list_employees(db, actor):
         rows = [actor["employee"]]
     return [{k: v for k, v in e.items() if k not in ("writerCode", "evaluatorCode")} |
             ({"writerCode": e.get("writerCode"), "evaluatorCode": e.get("evaluatorCode")}
-             if actor["isAdmin"] or (actor["employee"] and actor["employee"]["id"] == e["id"]) else {})
+             if actor["isAdmin"] or actor.get("isOrgAdmin") or (actor["employee"] and actor["employee"]["id"] == e["id"]) else {})
             for e in rows]
 
 
 def handle_upsert_employee(db, actor, payload):
-    if not actor["isAdmin"]:
-        raise ApiError("فقط الإدارة العامة تدير الموظفين", 403)
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير تديران الموظفين", 403)
+    actor_role = "admin" if actor["isAdmin"] else "manager"
+    actor_name = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
     row = payload["row"]
     existing = next((e for e in db["employees"] if e["id"] == row.get("id")), None)
     if existing:
         existing.update(row)
         existing["updatedAt"] = now_iso()
-        audit(db, "admin", "الإدارة", "تعديل موظف", "Employee", existing["id"], existing["name"])
+        audit(db, actor_role, actor_name, "تعديل موظف", "Employee", existing["id"], existing["name"])
         return existing
     row["id"] = row.get("id") or str(uuid.uuid4())
     row.setdefault("active", True)
     row["createdAt"] = now_iso()
     row["updatedAt"] = now_iso()
     db["employees"].append(row)
-    audit(db, "admin", "الإدارة", "إضافة موظف", "Employee", row["id"], row["name"])
+    audit(db, actor_role, actor_name, "إضافة موظف", "Employee", row["id"], row["name"])
     return row
 
 
 def handle_delete_employee(db, actor, payload):
-    if not actor["isAdmin"]:
-        raise ApiError("فقط الإدارة العامة تحذف الموظفين", 403)
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير يحذفان الموظفين", 403)
     eid = payload["id"]
     emp = next((e for e in db["employees"] if e["id"] == eid), None)
     db["employees"] = [e for e in db["employees"] if e["id"] != eid]
-    audit(db, "admin", "الإدارة", "حذف موظف", "Employee", eid, emp["name"] if emp else "")
+    audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
+          "حذف موظف", "Employee", eid, emp["name"] if emp else "")
     return {"deleted": eid}
 
 
@@ -421,12 +427,13 @@ def handle_get_settings(db, actor):
 
 
 def handle_set_settings(db, actor, payload):
-    if not actor["isAdmin"]:
-        raise ApiError("فقط الإدارة تعدّل الإعدادات", 403)
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403)
     new_settings = payload["settings"]
     new_settings["adminPassword"] = db["settings"]["adminPassword"]
     db["settings"] = new_settings
-    audit(db, "admin", "الإدارة", "تحديث إعدادات المعايير", "Settings", "-", "")
+    audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
+          "تحديث إعدادات المعايير", "Settings", "-", "")
     return db["settings"]
 
 
@@ -439,8 +446,8 @@ def handle_change_admin_password(db, actor, payload):
 
 
 def handle_list_audit(db, actor):
-    if not actor["isAdmin"]:
-        raise ApiError("فقط الإدارة ترى سجل التعديلات", 403)
+    if not actor.get("isOrgAdmin"):
+        raise ApiError("فقط الإدارة العامة أو المدير يريان سجل التعديلات", 403)
     return list(reversed(db["auditLog"]))
 
 

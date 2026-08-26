@@ -1,0 +1,4 @@
+api/data/db.json
+api/__pycache__/
+__pycache__/
+*.pyc

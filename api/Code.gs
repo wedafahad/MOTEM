@@ -197,12 +197,19 @@ function resolveActor_(auth) {
   if (auth.admin) {
     const settings = getSettings_();
     if (auth.password !== settings.adminPassword) throw new ApiError("كلمة مرور الإدارة غير صحيحة", 401);
-    return { isAdmin: true, employee: null, asWriter: false, asEvaluator: false };
+    return { isAdmin: true, isOrgAdmin: true, employee: null, asWriter: false, asEvaluator: false };
   }
   const emp = findEmployeeByCode_(auth.code);
   if (!emp || emp.active === false) throw new ApiError("الكود غير صحيح أو الحساب غير مُفعّل", 401);
+  // دمج 2.2: "المدير" (أعلى مقيّم في التسلسل الهرمي — بلا مدير فوقه) يكتسب صلاحيات
+  // الإدارة العامة التشغيلية (الموظفون/المعايير والأوزان/سجل التعديلات) إضافةً لما يملكه أصلًا
+  // كمقيّم. هذا لا يُغيّر actor.isAdmin (الذي يبقى محصورًا بكلمة مرور الإدارة العامة وحدها)
+  // حتى لا تنكسر خصوصية تفاصيل التقييمات (canSeeEvalDetail_ / handleListEval_ تعتمدان على
+  // asEvaluator + downlineIds_، لا على isOrgAdmin، فتبقى رؤية المدير لتفاصيل تقييمات فريقه كما هي).
+  const isTopManager = !!(emp.isEvaluator && !emp.managerId);
   return {
     isAdmin: false,
+    isOrgAdmin: isTopManager,
     employee: emp,
     asWriter: !!(emp.isWriter && emp.writerCode === auth.code),
     asEvaluator: !!(emp.isEvaluator && emp.evaluatorCode === auth.code),
@@ -242,7 +249,7 @@ function handleListEmployees_(actor) {
   return rows.map((e) => {
     const clean = {};
     Object.keys(e).forEach((k) => { if (k !== "writerCode" && k !== "evaluatorCode") clean[k] = e[k]; });
-    if (actor.isAdmin || (actor.employee && actor.employee.id === e.id)) {
+    if (actor.isAdmin || actor.isOrgAdmin || (actor.employee && actor.employee.id === e.id)) {
       clean.writerCode = e.writerCode; clean.evaluatorCode = e.evaluatorCode;
     }
     return clean;
@@ -250,28 +257,30 @@ function handleListEmployees_(actor) {
 }
 
 function handleUpsertEmployee_(actor, payload) {
-  if (!actor.isAdmin) throw new ApiError("فقط الإدارة العامة تدير الموظفين", 403);
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير تديران الموظفين", 403);
+  const actorRole = actor.isAdmin ? "admin" : "manager";
+  const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   const row = payload.row;
   const existing = row.id ? findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === row.id) : null;
   if (existing) {
     const merged = Object.assign({}, existing, row, { updatedAt: nowIso() });
     upsertRow_(SHEET_NAMES.EMPLOYEES, merged);
-    audit_("admin", "الإدارة", "تعديل موظف", "Employee", merged.id, merged.name);
+    audit_(actorRole, actorName, "تعديل موظف", "Employee", merged.id, merged.name);
     return merged;
   }
   row.id = row.id || newId();
   if (row.active === undefined) row.active = true;
   row.createdAt = nowIso(); row.updatedAt = nowIso();
   upsertRow_(SHEET_NAMES.EMPLOYEES, row);
-  audit_("admin", "الإدارة", "إضافة موظف", "Employee", row.id, row.name);
+  audit_(actorRole, actorName, "إضافة موظف", "Employee", row.id, row.name);
   return row;
 }
 
 function handleDeleteEmployee_(actor, payload) {
-  if (!actor.isAdmin) throw new ApiError("فقط الإدارة العامة تحذف الموظفين", 403);
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يحذفان الموظفين", 403);
   const emp = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === payload.id);
   deleteRow_(SHEET_NAMES.EMPLOYEES, payload.id);
-  audit_("admin", "الإدارة", "حذف موظف", "Employee", payload.id, emp ? emp.name : "");
+  audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "حذف موظف", "Employee", payload.id, emp ? emp.name : "");
   return { deleted: payload.id };
 }
 
@@ -496,12 +505,12 @@ function handleApproveEval_(actor, payload) {
 function handleGetSettings_() { return getSettings_(); }
 
 function handleSetSettings_(actor, payload) {
-  if (!actor.isAdmin) throw new ApiError("فقط الإدارة تعدّل الإعدادات", 403);
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403);
   const current = getSettings_();
   const next = payload.settings;
   next.adminPassword = current.adminPassword;
   setSettings_(next);
-  audit_("admin", "الإدارة", "تحديث إعدادات المعايير", "Settings", "-", "");
+  audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "تحديث إعدادات المعايير", "Settings", "-", "");
   return next;
 }
 
@@ -515,7 +524,7 @@ function handleChangeAdminPassword_(actor, payload) {
 }
 
 function handleListAudit_(actor) {
-  if (!actor.isAdmin) throw new ApiError("فقط الإدارة ترى سجل التعديلات", 403);
+  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يريان سجل التعديلات", 403);
   return readAll_(SHEET_NAMES.AUDIT).reverse();
 }
 
@@ -765,8 +774,10 @@ function DEFAULT_SETTINGS_() {
         ] },
       { id: "client_satisfaction", name: "رضا العميل (غير مباشر)", type: "rubric_group", category: "technical", weightWriter: 10, weightSenior: 10,
         criteria: [
-          { id: "first_draft_acceptance", name: "نسبة القبول من أول مسودة", type: "ratio", metric: "firstDraftAcceptRate",
-            unit: "%", weight: 50, bands: { "5": 90, "3": 60, "1": 0 }, higherIsBetter: true },
+          { id: "first_draft_acceptance", name: "نسبة القبول من أول مسودة", weight: 50,
+            anchors: { "5": "معظم أعمال الربع اعتُمدت من أول مسودة دون أي تعديل جوهري على المحتوى",
+              "3": "بعض الأعمال احتاجت جولة تعديل واحدة على المحتوى، لكن الغالبية اعتُمدت مباشرة",
+              "1": "معظم الأعمال احتاجت أكثر من جولة تعديل على المحتوى قبل قبولها" } },
           { id: "revision_rounds", name: "جولات تعديل المحتوى لكل مشروع", type: "ratio", metric: "avgContentRevisionRounds",
             unit: "جولة", weight: 50, bands: { "5": 1, "3": 3, "1": 4 }, higherIsBetter: false },
         ] },
@@ -827,4 +838,115 @@ function DEFAULT_SETTINGS_() {
       { min: 0.00, max: 1.49, label: "لا يواكب التوقعات" },
     ],
   };
+}
+
+// ============================= الأرشفة الفصلية (بند 2.3) =============================
+// لا يُثبَّت أي Trigger تلقائي من مجرّد وجود هذا الكود في الملف — التثبيت خطوة يدوية صريحة
+// (installQuarterlyArchiveTrigger أدناه) يُنفّذها المستخدم بنفسه من محرر Apps Script،
+// تمامًا كخطوة setupInitialData، لأنها تُفعّل جدولة تلقائية تمسّ توفّر البيانات.
+//
+// "تصفير سجل الأعمال" هنا يعني نقل بيانات الربع السابق إلى ورقة أرشيف منفصلة (WorkLog_Archive،
+// BehavioralLog_Archive، EvalScores_Archive) — لا حذفها نهائيًا. الهدف تخفيف حمل الأوراق الحيّة
+// عن الخادم، لا فقدان البيانات؛ الأرشيف يبقى مفتوحًا للاطّلاع اليدوي من الشيت نفسه، لكن التطبيق
+// (listWork/listEval/...) لا يقرأ إلا من الأوراق الحيّة، فالربع المؤرشَف يختفي فعليًا من الواجهة
+// كما هو مطلوب ("لا يمكن الرجوع إليه بعدها").
+
+const ARCHIVE_SUFFIX = "_Archive";
+const ARCHIVE_DELAY_DAYS = 21; // 3 أسابيع بعد بداية كل ربع جديد
+const ARCHIVABLE_SHEETS = [SHEET_NAMES.WORKLOG, SHEET_NAMES.BEHAVIORAL, SHEET_NAMES.EVAL];
+
+function quarterOf_(date) {
+  const q = Math.floor(date.getMonth() / 3) + 1;
+  return date.getFullYear() + "-Q" + q;
+}
+
+function quarterStartDate_(quarterStr) {
+  const parts = quarterStr.split("-Q");
+  const y = Number(parts[0]), q = Number(parts[1]);
+  return new Date(y, (q - 1) * 3, 1);
+}
+
+function previousQuarter_(quarterStr) {
+  const parts = quarterStr.split("-Q");
+  let year = Number(parts[0]), q = Number(parts[1]) - 1;
+  if (q === 0) { q = 4; year -= 1; }
+  return year + "-Q" + q;
+}
+
+/**
+ * دالة الفحص اليومي — مصمَّمة لتُستدعى مرة كل يوم عبر Trigger زمني (لا في تاريخ محدد بالضبط،
+ * تجنّبًا لهشاشة توقيت Apps Script)، لكنها لا تُنفّذ أي أرشفة فعلية إلا حين يتحقق الشرطان معًا:
+ * (أ) مرّ 21 يومًا على الأقل من بداية الربع الحالي، (ب) الربع السابق لم يُؤرشَف بعد.
+ * أي خطأ أثناء الأرشفة يوقف العملية بالكامل قبل حذف أي صف من الورقة الحيّة (انظر archiveQuarterFromSheet_).
+ */
+function archiveOldQuartersIfDue() {
+  const today = new Date();
+  const currentQ = quarterOf_(today);
+  const daysSinceStart = Math.floor((today - quarterStartDate_(currentQ)) / 86400000);
+  if (daysSinceStart < ARCHIVE_DELAY_DAYS) return; // لم يحن الوقت بعد لهذا الربع
+
+  const targetQuarter = previousQuarter_(currentQ);
+  const settings = getSettings_();
+  const archived = settings.archivedQuarters || [];
+  if (archived.indexOf(targetQuarter) !== -1) return; // أُرشف هذا الربع سابقًا — لا تكرار
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    ARCHIVABLE_SHEETS.forEach((name) => archiveQuarterFromSheet_(name, targetQuarter));
+    settings.archivedQuarters = archived.concat([targetQuarter]);
+    setSettings_(settings);
+    audit_("system", "أرشفة تلقائية", "أرشفة ربع", "System", targetQuarter, "تم نقل بيانات " + targetQuarter + " إلى أوراق الأرشيف");
+  } catch (err) {
+    audit_("system", "أرشفة تلقائية", "فشل أرشفة", "System", targetQuarter, String(err));
+    throw err; // لا نُخفي الفشل — يظهر في سجل Executions بمحرر Apps Script
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** ينقل صفوف ربع واحد من ورقة حيّة إلى ورقة أرشيف بنفس الاسم + "_Archive": نسخ فالتحقق فالحذف — بهذا الترتيب فقط. */
+function archiveQuarterFromSheet_(sheetName, quarter) {
+  const rows = readAll_(sheetName).filter((r) => r.quarter === quarter);
+  if (!rows.length) return;
+
+  const archiveName = sheetName + ARCHIVE_SUFFIX;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let archiveSheet = ss.getSheetByName(archiveName);
+  if (!archiveSheet) {
+    archiveSheet = ss.insertSheet(archiveName);
+    archiveSheet.appendRow(HEADERS[sheetName]);
+    archiveSheet.setFrozenRows(1);
+  }
+
+  const headers = HEADERS[sheetName];
+
+  // 1) نسخ كامل الصفوف إلى الأرشيف أولًا (قبل أي حذف) — نفس objectToRow_ المستخدمة أصلًا في upsertRow_
+  rows.forEach((r) => {
+    archiveSheet.appendRow(objectToRow_(sheetName, headers, r));
+  });
+
+  // 2) تحقق أساسي: عدد صفوف هذا الربع بالأرشيف بعد النسخ >= ما نسخناه فعلًا
+  const archivedCountAfter = readAll_(archiveName).filter((r) => r.quarter === quarter).length;
+  if (archivedCountAfter < rows.length) {
+    throw new Error("فشل التحقق من نسخ " + sheetName + " للربع " + quarter + " إلى الأرشيف — أُوقف الحذف من الورقة الحيّة، لا بيانات فُقدت");
+  }
+
+  // 3) الحذف من الورقة الحيّة فقط بعد نجاح النسخ والتحقق أعلاه
+  rows.forEach((r) => deleteRow_(sheetName, r.id));
+}
+
+/**
+ * خطوة تثبيت يدوية صريحة — نفّذيها بنفسك من القائمة المنسدلة بجانب ▶ Run في محرر Apps Script
+ * (تمامًا كخطوة setupInitialData)، ولا تُشغَّل تلقائيًا من مجرّد وجودها في الملف.
+ * تُثبّت Trigger زمني يوميّ (لا في يوم محدد بالضبط) يستدعي archiveOldQuartersIfDue كل يوم؛
+ * الدالة نفسها لا تُنفّذ الأرشفة الفعلية إلا حين يحين وقتها كما هو موضّح أعلاه.
+ * شغّليها فقط بعد مراجعتك لآلية archiveOldQuartersIfDue وموافقتك عليها.
+ */
+function installQuarterlyArchiveTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter((t) => t.getHandlerFunction() === "archiveOldQuartersIfDue")
+    .forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger("archiveOldQuartersIfDue").timeBased().everyDays(1).atHour(3).create();
+  Logger.log("تم تثبيت Trigger يومي — سيُنفَّذ archiveOldQuartersIfDue تلقائيًا كل يوم قرابة الساعة 3 صباحًا بتوقيت مشروع Apps Script.");
 }

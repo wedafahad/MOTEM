@@ -24,9 +24,6 @@ const Calc = (() => {
   function computeMetrics(workRows) {
     const delivered = workRows.filter((w) => w.delivered);
     const total = workRows.length;
-    const firstDraftAcceptRate = delivered.length
-      ? (100 * delivered.filter((w) => w.firstDraftAccepted).length) / delivered.length
-      : null;
     const avgContentRevisionRounds = delivered.length
       ? delivered.reduce((s, w) => s + (Number(w.contentRevisionRounds) || 0), 0) / delivered.length
       : null;
@@ -34,7 +31,7 @@ const Calc = (() => {
       ? (100 * delivered.filter((w) => w.onTime).length) / delivered.length
       : null;
     const taskCompletionRate = total ? (100 * delivered.length) / total : null;
-    return { firstDraftAcceptRate, avgContentRevisionRounds, onTimeRate, taskCompletionRate };
+    return { avgContentRevisionRounds, onTimeRate, taskCompletionRate };
   }
 
   /** نسبة مزيج الإبداعي/الرسمي هذا الربع — يُستخدم لتحديد أوزان معايير الجودة لكاتب "عام". */
