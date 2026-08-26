@@ -1273,17 +1273,26 @@ async function renderAdminOverviewView(el) {
   const bestOverall = pickBest((ev) => (ev.totalScore === null || ev.totalScore === undefined ? null : ev.totalScore));
   const detailUnavailable = withEmployee.length > 0 && !bestTechnical && !bestBehavioral;
 
-  // النشر للموظفين (تحفيز، بالاسم فقط بلا رقم) — قرار يدوي عائد للإدارة العامة أو المدير، وليس تلقائيًا
+  // النشر للموظفين (تحفيز، بالاسم فقط بلا رقم) — قرار يدوي عائد للإدارة العامة أو المدير، وليس تلقائيًا.
+  // مهم: "منشور فعليًا الآن" (isPublished) يختلف عن "يطابق ربع النشر الحالي" (isCurrent) — لو فيه نشر
+  // قديم من ربع سابق لم يُلغَ، يبقى ظاهرًا فعليًا للموظفين، فيجب ألا نعرض "غير منشور" بشكل مضلِّل.
   const published = App.settings.topPerformerPublished;
-  const isPublishedForPrevQuarter = !!(published && published.quarter === prevQuarter);
+  const isPublished = !!published;
+  const isCurrent = isPublished && published.quarter === prevQuarter;
+  const isStale = isPublished && !isCurrent;
   const publishControlsHtml = !withEmployee.length ? "" : `
-    <div class="flex-between" style="margin-top:10px">
-      ${isPublishedForPrevQuarter
+    <div class="flex-between" style="margin-top:10px; flex-wrap:wrap; gap:10px">
+      ${isCurrent
         ? `<span class="badge badge-approved">منشور للفريق بالاسم فقط (بدون درجات)</span>`
+        : isStale
+        ? `<span class="badge badge-submitted">⚠️ منشور حاليًا للفريق لكن من ربع سابق (${esc(published.quarter)}) — حدّثيه أو ألغِه</span>`
         : `<span class="small-muted">غير منشور للفريق بعد — يظهر لهم بالاسم فقط دون أي رقم.</span>`}
-      <button class="btn ${isPublishedForPrevQuarter ? "btn-ghost" : "btn-primary"}" id="topPerfPublishBtn">
-        ${isPublishedForPrevQuarter ? "إلغاء النشر" : "📣 نشر موظف الربع للفريق"}
-      </button>
+      <div class="gap-8">
+        ${isStale ? `<button class="btn btn-primary" id="topPerfPublishBtn" data-action="publish">تحديث النشر لهذا الربع</button>
+        <button class="btn btn-ghost" id="topPerfUnpublishBtn" data-action="unpublish">إلغاء النشر</button>` : ""}
+        ${isCurrent ? `<button class="btn btn-ghost" id="topPerfUnpublishBtn" data-action="unpublish">إلغاء النشر</button>` : ""}
+        ${!isPublished ? `<button class="btn btn-primary" id="topPerfPublishBtn" data-action="publish">📣 نشر موظف الربع للفريق</button>` : ""}
+      </div>
     </div>`;
 
   const topPerformersHtml = !prevQuarter ? "" : `
@@ -1326,13 +1335,19 @@ async function renderAdminOverviewView(el) {
   if (publishBtn) {
     publishBtn.onclick = async () => {
       try {
-        if (isPublishedForPrevQuarter) {
-          await Api.call("unpublishTopPerformer", { auth: authOf(s) });
-          toast("أُلغي النشر");
-        } else {
-          await Api.call("publishTopPerformer", { auth: authOf(s), payload: { quarter: prevQuarter } });
-          toast("نُشر للفريق بالاسم فقط");
-        }
+        await Api.call("publishTopPerformer", { auth: authOf(s), payload: { quarter: prevQuarter } });
+        toast("نُشر للفريق بالاسم فقط");
+        App.settings = await Api.call("getSettings", { auth: authOf(s) });
+        renderAdminOverviewView(el);
+      } catch (err) { toast(err.message); }
+    };
+  }
+  const unpublishBtn = document.getElementById("topPerfUnpublishBtn");
+  if (unpublishBtn) {
+    unpublishBtn.onclick = async () => {
+      try {
+        await Api.call("unpublishTopPerformer", { auth: authOf(s) });
+        toast("أُلغي النشر");
         App.settings = await Api.call("getSettings", { auth: authOf(s) });
         renderAdminOverviewView(el);
       } catch (err) { toast(err.message); }
