@@ -862,12 +862,14 @@ function clientDownlineIds(employees, rootId) {
 
 async function renderTeamView(el) {
   const s = App.session;
-  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  const [employees, evalRows] = await Promise.all([
+    Api.call("listEmployees", { auth: authOf(s) }),
+    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
+  ]);
   const reports = employees.filter((e) => e.id !== s.employee.id && e.managerId === s.employee.id);
   // كل من تحتك هرميًا بخلاف تقاريرك المباشرين (المستوى الثاني فأعمق) — للاطّلاع الكامل على الفريق وتقييماته
   const directIds = new Set(reports.map((r) => r.id));
   const extendedTeam = employees.filter((e) => e.isWriter && e.id !== s.employee.id && !directIds.has(e.id));
-  const evalRows = await Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } });
 
   // تقييمات فريق تحت إشراف أعضاء فريقي المباشرين (تدقيق/اعتماد على مستوى ثانٍ) بانتظار اعتمادي —
   // مقصورة فعليًا على مقيّمين تحت إشرافي هرميًا (لا أي تقييم مُرسَل بالنظام كله بالخطأ).
@@ -963,12 +965,12 @@ async function renderReviewView(el) {
   const s = App.session;
   const empId = App.reviewTargetId;
   if (!empId) { el.innerHTML = `<div class="empty-state">اختاري تقييمًا من «فريقي» للمراجعة</div>`; return; }
-  const employees = await Api.call("listEmployees", { auth: authOf(s) });
-  const employee = employees.find((e) => e.id === empId);
-  const [evalRows, workRows] = await Promise.all([
+  const [employees, evalRows, workRows] = await Promise.all([
+    Api.call("listEmployees", { auth: authOf(s) }),
     Api.call("listEval", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } }),
     Api.call("listWork", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } }),
   ]);
+  const employee = employees.find((e) => e.id === empId);
   const row = evalRows[0];
   if (!row) { el.innerHTML = `<div class="empty-state">لا يوجد تقييم لعرضه</div>`; return; }
   renderStructuredDashboard(el, { employee, row, revealValues: true, title: `مراجعة تقييم — ${employee?.name || ""}`, workRows });
@@ -1246,17 +1248,14 @@ function topPerformerCardHtml(label, best) {
 
 async function renderAdminOverviewView(el) {
   const s = App.session;
-  const [employees, evalRows] = await Promise.all([
-    Api.call("listEmployees", { auth: authOf(s) }),
-    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
-  ]);
-  const writers = employees.filter((e) => e.isWriter);
-
   // موظف الربع الماضي (بند 3.3) — دائمًا للربع السابق فعليًا بغض النظر عن الربع المختار بالجدول أسفله
   const prevQuarter = Store.quarterOptions()[1];
-  const prevEvalRows = prevQuarter
-    ? await Api.call("listEval", { auth: authOf(s), payload: { quarter: prevQuarter } })
-    : [];
+  const [employees, evalRows, prevEvalRows] = await Promise.all([
+    Api.call("listEmployees", { auth: authOf(s) }),
+    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
+    prevQuarter ? Api.call("listEval", { auth: authOf(s), payload: { quarter: prevQuarter } }) : Promise.resolve([]),
+  ]);
+  const writers = employees.filter((e) => e.isWriter);
   const approvedPrev = prevEvalRows.filter((e) => e.status === "approved");
   const withEmployee = approvedPrev.map((ev) => ({ ev, emp: writers.find((w) => w.id === ev.employeeId) })).filter((x) => x.emp);
   const pickBest = (valueFn) => {
@@ -1558,14 +1557,18 @@ async function renderSettingsView(el) {
     pillarsBox.querySelectorAll(".suggestBand").forEach((b) => (b.onclick = async () => {
       const p = settings.pillars[b.dataset.p], c = p.criteria[b.dataset.c];
       try {
-        const employees = await Api.call("listEmployees", { auth: authOf(s) });
+        const [employees, allWork] = await Promise.all([
+          Api.call("listEmployees", { auth: authOf(s) }),
+          Api.call("listWork", { auth: authOf(s), payload: { quarter: App.quarter } }),
+        ]);
         const writers = employees.filter((e) => e.isWriter);
+        const workByEmployee = {};
+        allWork.forEach((r) => { (workByEmployee[r.employeeId] || (workByEmployee[r.employeeId] = [])).push(r); });
         const values = [];
-        for (const w of writers) {
-          const rows = await Api.call("listWork", { auth: authOf(s), payload: { employeeId: w.id, quarter: App.quarter } });
-          const m = Calc.computeMetrics(rows);
+        writers.forEach((w) => {
+          const m = Calc.computeMetrics(workByEmployee[w.id] || []);
           if (m[c.metric] !== null) values.push(m[c.metric]);
-        }
+        });
         const suggestion = Calc.suggestBands(values, c.higherIsBetter);
         if (!suggestion) return toast("لا توجد بيانات كافية هذا الربع للاقتراح");
         if (confirm(`الاقتراح: 5=${suggestion["5"]} / 3=${suggestion["3"]} / 1=${suggestion["1"]} — تطبيق؟`)) {
@@ -1634,37 +1637,71 @@ async function renderExportView(el) {
     <div class="field"><label>الربع</label><select id="expQ">${Store.quarterOptions().map((q) => `<option ${q === App.quarter ? "selected" : ""}>${q}</option>`).join("")}</select></div>
     <button class="btn btn-primary" id="doExport">تنزيل ملف Excel</button>
   </div>`;
-  document.getElementById("doExport").onclick = async () => {
+  const btn = document.getElementById("doExport");
+  const originalLabel = btn.textContent;
+  btn.onclick = async () => {
     const quarter = document.getElementById("expQ").value;
+    btn.disabled = true;
+    btn.textContent = "جارٍ التحضير…";
     try {
       await exportExcel(quarter);
-    } catch (err) { toast(err.message); }
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   };
+}
+
+/** تُحمَّل مكتبة XLSX (~930K) عند الحاجة فقط عند أول تصدير، بدل تحميلها مع كل صفحة — كانت تُحمَّل
+ * سابقًا كسكربت ثابت في كل تحميل للموقع رغم استخدامها هنا فقط، وهذا كان يُبطئ ظهور كل صفحة. */
+let xlsxLoadPromise = null;
+function loadXlsxLib() {
+  if (typeof XLSX !== "undefined") return Promise.resolve();
+  if (!xlsxLoadPromise) {
+    xlsxLoadPromise = new Promise((resolve, reject) => {
+      const tag = document.createElement("script");
+      tag.src = "vendor/xlsx.full.min.js";
+      tag.onload = () => resolve();
+      tag.onerror = () => { xlsxLoadPromise = null; reject(new Error("تعذّر تحميل مكتبة التصدير — تحقّقي من الاتصال بالإنترنت")); };
+      document.head.appendChild(tag);
+    });
+  }
+  return xlsxLoadPromise;
 }
 
 async function exportExcel(quarter) {
   const s = App.session;
-  // listEmployees مُقيَّدة من الخادم نفسه بحسب الدور (الإدارة: الجميع، المقيّم: نفسه + كامل تسلسله الهرمي) —
-  // لا حاجة لإعادة الفلترة هنا بـ managerId المباشر (كان هذا يقصي تقارير المستوى الثاني عن غير قصد).
-  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  await loadXlsxLib();
+  // listEval/listWork بلا employeeId تُعيدان كل صفوف الربع دفعة واحدة (مُقيَّدة من الخادم أصلًا حسب صلاحية
+  // العارض)، بدل استعلام منفصل لكل موظف — كانت الحلقة القديمة تفتح عشرات الطلبات المتتالية لخادم Apps Script
+  // البطيء أصلًا، فيبدو التصدير معلَّقًا كلما كبر الفريق.
+  const [employees, evalRows, workRows] = await Promise.all([
+    Api.call("listEmployees", { auth: authOf(s) }),
+    Api.call("listEval", { auth: authOf(s), payload: { quarter } }),
+    Api.call("listWork", { auth: authOf(s), payload: { quarter } }),
+  ]);
   const targets = employees.filter((e) => e.isWriter);
+  const evalByEmployee = {};
+  evalRows.forEach((ev) => { if (!evalByEmployee[ev.employeeId]) evalByEmployee[ev.employeeId] = ev; });
+  const workByEmployee = {};
+  workRows.forEach((w) => { (workByEmployee[w.employeeId] || (workByEmployee[w.employeeId] = [])).push(w); });
 
   const summaryRows = [["الاسم", "المستوى", "التخصص", "الحالة", "الدرجة", "التصنيف"]];
   const workRowsOut = [["الموظف", "العنوان", "نوع الكتابة", "نوع العمل", "نوع الإجراء", "المشروع", "مراجعة لعمل سابق؟", "التاريخ", "تسليم", "بالموعد", "جولات تعديل محتوى", "جولات تعديل نطاق"]];
 
-  for (const emp of targets) {
-    const evalRows = await Api.call("listEval", { auth: authOf(s), payload: { employeeId: emp.id, quarter } });
-    const ev = evalRows[0];
+  targets.forEach((emp) => {
+    const ev = evalByEmployee[emp.id];
     summaryRows.push([emp.name, emp.level === "senior" ? "كاتب أول" : "كاتب", specialtyLabel(emp.specialty), ev?.status || "—", ev?.totalScore ?? "—", ev?.classification || "—"]);
-    const work = await Api.call("listWork", { auth: authOf(s), payload: { employeeId: emp.id, quarter } });
-    work.forEach((w) => workRowsOut.push([
+    (workByEmployee[emp.id] || []).forEach((w) => workRowsOut.push([
       emp.name, w.title, w.workType === "creative" ? "إبداعي" : "رسمي",
       w.workCategory === "أخرى" ? w.customCategory : (w.workCategory || ""), w.actionType || "", w.project || "",
       w.isRevision ? "نعم" : "لا",
       w.date, w.delivered ? "نعم" : "لا", w.onTime ? "نعم" : "لا",
       w.contentRevisionRounds ?? 0, w.scopeRevisionRounds ?? 0,
     ]));
-  }
+  });
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "ملخص التقييم");
