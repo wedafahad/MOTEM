@@ -328,12 +328,14 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 .top-performer-banner { background: var(--sage-tint); border: var(--border); }
 
 @media print {
+  @page { size: A4; margin: 8mm; }
   body * { visibility: hidden; }
   .print-eval-sheet, .print-eval-sheet * { visibility: visible; }
   /* تثبيت كل ألوان الهوية على قيمها الفاتحة داخل التصدير — بغض النظر عن الوضع الداكن الحالي للتطبيق،
      لضمان خلفية موحّدة اللون بدل تداخل عناصر داكنة مع بطاقات بيضاء مفروضة */
   .print-eval-sheet {
-    position: absolute; inset: 0; padding: 10mm; background: #fff; color: #111;
+    position: absolute; inset: 0; padding: 0; background: #fff; color: #111;
+    font-size: 11px; line-height: 1.25;
     --ink: #111111; --ink-2: #585858; --ink-3: #949494;
     --paper: #ffffff; --paper-tint: #f7f5f4; --mist: #ededf2; --mist-tint: #f2f2f6; --card-bg: #ffffff;
     --lilac: #c9bff2; --lilac-tint: #e7e2f9; --lilac-shade: #857ea0;
@@ -343,7 +345,10 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
     --danger: #b3452f; --danger-tint: #f6e4e0;
     --border: 1px solid rgba(17, 17, 17, 0.12); --shadow: none;
   }
-  .print-header { display: flex !important; align-items: center; gap: 16px; margin-bottom: 18px; border-bottom: 2px solid #111; padding-bottom: 10px; }
+  .print-header { display: flex !important; align-items: center; gap: 10px; margin-bottom: 8px; border-bottom: 1.5px solid #111; padding-bottom: 6px; }
+  .print-header h2 { font-size: 15px; }
+  .print-header p { font-size: 10px; }
+  .print-logo { height: 24px; }
   .card { box-shadow: none !important; border: 1px solid #ccc !important; break-inside: avoid; background: #fff !important; }
   /* تصدير موجز وملوّن: شرح الدرجات (١/٣/٥) لا يظهر إطلاقًا في PDF، والألوان (الأشرطة والشارات) تُطبع كما هي على الشاشة لا رمادية — بناءً على طلب واضح */
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
@@ -353,4 +358,20 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
   /* بند 3.2: التبويبات لعرض الشاشة فقط — عند الطباعة/تصدير PDF تظهر كل الأقسام مرة واحدة كما كانت دائمًا */
   .dash-tabs { display: none !important; }
   .dash-tab-panel { display: block !important; }
+
+  /* تنسيق مضغوط إضافي: أرقام وبطاقات أصغر بصريًا حتى يحتوي التقييم كاملًا في صفحة واحدة قدر الإمكان */
+  .print-eval-sheet .card { padding: 8px 10px; margin-bottom: 8px; }
+  .print-eval-sheet .card h3 { font-size: 12px; margin: 0 0 6px; }
+  .print-eval-sheet .top-performer-banner { padding: 6px 10px; margin-bottom: 8px; }
+  .print-eval-sheet .total-score-card { gap: 12px; padding: 8px 10px; }
+  .print-eval-sheet .total-score-num { font-size: 26px; }
+  .print-eval-sheet .total-score-classification { font-size: 10.5px; padding: 3px 10px; }
+  .print-eval-sheet .stat-tiles { gap: 6px; margin-bottom: 8px; }
+  .print-eval-sheet .stat-tile { padding: 6px 8px; }
+  .print-eval-sheet .stat-tile .stat-num { font-size: 16px; }
+  .print-eval-sheet .stat-tile .stat-label { font-size: 9px; margin-top: 2px; }
+  .print-eval-sheet .pillar-chart .chart-row { gap: 8px; margin-bottom: 6px; }
+  .print-eval-sheet .chart-row-label { font-size: 10px; }
+  .print-eval-sheet .score-bar-track { height: 5px; }
+  .print-eval-sheet .score-bar-num { font-size: 9.5px; padding: 1px 6px; min-width: 26px; }
 }

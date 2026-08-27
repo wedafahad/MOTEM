@@ -12,7 +12,7 @@
 
 ```json
 {
-  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer",
+  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer | listDocuments | uploadDocument | deleteDocument | reviewDocument",
   "auth": { "code": "XXXXXX" } ,
   "payload": { }
 }
@@ -64,16 +64,30 @@ selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt`
 `pillars[], classification[], revisionValueMultiplier, topPerformerPublished` — قابل للتعديل بالكامل من شاشة الإعدادات (إدارة فقط).
 كل ركيزة فيها `category(technical|behavioral)` يحدّد قسمها في لوحة الكاتب، و`weightWriter`/`weightSenior` — الركيزة ذات وزن 0 لمستوى معيّن تُستبعد كليًا (لا تُعرض، لا تُطلب من المقيّم، لا تدخل حساب الاكتمال) لذلك المستوى، كحال ركيزة `leadership` مع الكاتب العادي.
 - ركيزتا `teamwork` (العمل الجماعي — سلوكي) و`info_accuracy` (دقة المعلومات ومصادر موثوقة — فني) مُضافتان بوزن `0/0` افتراضيًا (مرحلة 1) حتى لا تتغيّر درجة أي كاتب تلقائيًا؛ على الإدارة تحديد وزنهما الفعلي من شاشة «المعايير والأوزان» (وعادةً خصم ذلك الوزن من ركيزة أخرى لإبقاء المجموع 100).
+- **حماية `pillars`/`classification`**: `getSettings` (`Code.gs`) يرمّم تلقائيًا أي حالة تكون فيها `pillars` أو `classification` مفقودة/فاسدة/فاضية (JSON تالف، خلية فاضية بالشيت، حذف غير مقصود) بإرجاعها للقيم الافتراضية (`DEFAULT_SETTINGS_`) وإعادة حفظها — دون المساس بأي حقل آخر سليم. `setSettings` يرفض أي حفظ لا يحتوي `pillars` كمصفوفة غير فارغة، برسالة خطأ واضحة، بدل قبول حفظ يكسر كل شاشة تعتمد عليها لاحقًا (هذا ما كان يسبب خطأ `Cannot read properties of undefined (reading 'filter')` في "لوحتي" عند فساد الإعدادات). `mock_server.py` يطبّق نفس رفض الحفظ، وترميم قراءة أبسط (مصفوفات فارغة، لا قيم افتراضية كاملة، لعدم وجود `DEFAULT_SETTINGS_` محلي فيه).
 
 ## موظف الربع — نشر بالاسم فقط (بديل بند 3.3 للموظفين)
-`publishTopPerformer` (`auth.isOrgAdmin` فقط — إدارة عامة أو مدير) يحسب سيرفريًا، من بيانات EvalScores الكاملة غير المُصفّاة بصرف النظر عن هوية المُستدعي، أفضل ثلاثة (فنيًا/سلوكيًا/كمجموع، بين تقييمات `status === "approved"` فقط لربع مُعطى)، ويخزّن **الاسم فقط بلا أي رقم درجة** في `Settings.topPerformerPublished = { quarter, technical:{employeeId,name}|null, behavioral:{...}|null, overall:{...}|null, publishedBy, publishedAt }`. هذا الحقل يعود ضمن `getSettings` العادي — أي مستخدم مسجَّل دخوله (بما فيهم الكتّاب) يراه، وهذا مقصود: هو "تحفيز" علني بالاسم لا بيانات تقييم سرّية. `unpublishTopPerformer` (نفس الصلاحية) يمسحه (`null`). القرار يدوي بالكامل من واجهة «نظرة عامة» — لا نشر تلقائي عند اعتماد أي تقييم.
+`publishTopPerformer` يحسب سيرفريًا، من بيانات EvalScores الكاملة غير المُصفّاة بصرف النظر عن هوية المُستدعي، أفضل ثلاثة (فنيًا/سلوكيًا/كمجموع، بين تقييمات `status === "approved"` فقط لربع مُعطى)، ويخزّن **الاسم فقط بلا أي رقم درجة** في `Settings.topPerformerPublished = { quarter, technical:{employeeId,name}|null, behavioral:{...}|null, overall:{...}|null, publishedBy, publishedAt }`. هذا الحقل يعود ضمن `getSettings` العادي — أي مستخدم مسجَّل دخوله (بما فيهم الكتّاب) يراه، وهذا مقصود: هو "تحفيز" علني بالاسم لا بيانات تقييم سرّية. `unpublishTopPerformer` يمسحه (`null`).
+
+- **الصلاحية والنطاق (وسّعت لتشمل أي مقيّم، لا الإدارة/المدير فقط)**: `auth.isOrgAdmin` (إدارة عامة أو المدير الأعلى) **أو** `auth.asEvaluator` (أي مقيّم عادي) يملكان حق النشر. النطاق يختلف حسب الفاعل عبر `topPerformerWritersScope_` (Code.gs) / `_top_performer_writers_scope` (mock_server.py): الإدارة العامة والمدير الأعلى يرشّحان من بين **كل** كتّاب الشركة، وأي مقيّم آخر يُقصر الترشيح على كتّاب نطاقه فقط (تسلسله الهرمي/downline + نفسه إن كان كاتبًا أيضًا) — نفس مبدأ `readableWorkIds_` المطبَّق على WorkLog/Documents. سجل التدقيق (`audit_`) يسجّل `actorRole` الحقيقي (`admin`/`manager`/`evaluator`).
+- **الظهور في الواجهة**: زر النشر/إلغاء النشر يظهر **دائمًا** في شاشة «فريقي» لأي مقيّم وفي «نظرة عامة» للإدارة/المدير — وليس فقط بعد توفر تقييمات معتمدة لهذا الربع (طلب صريح: لا ينتظر "طلوع الدرجات").
+- القرار يدوي بالكامل — لا نشر تلقائي عند اعتماد أي تقييم.
+
+### Documents (مرحلة ٤ — توثيق الكاتب)
+`id, employeeId, docType(course|initiative|interaction), fileName, mimeType, driveFileId, driveUrl, status(pending|approved|rejected), reviewedBy, reviewNote, uploadedAt, updatedAt`
+
+- `docType`: مرتبط مباشرة بمعايير تقييم فعلية — `course` (النمو المهني)، `initiative`/`interaction` (التفاعل والمساهمة الجماعية). لا علاقة تلقائية بحساب الدرجة — إثبات داعم يراجعه المقيّم يدويًا فقط.
+- الرفع (`uploadDocument`): الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة. الحمولة: `{employeeId, docType, fileName, mimeType, dataBase64}` — الملف بترميز base64، بحد أقصى 8MB بعد فك الترميز.
+- التخزين الفعلي: `Code.gs` يحفظ الملف في مجلد Drive واحد تابع لنفس حساب تشغيل الـ Web App (`Execute as: Me`) — لا يحتاج تفعيل أي API خارجي إضافي، فقط موافقة صلاحية Drive تُطلَب تلقائيًا عند أول نشر (Deploy) بعد إضافة هذا الكود. رابط الملف (`driveUrl`) يُضبط كـ "Anyone with the link: Viewer"، ويُخزَّن في الشيت فقط — لا يُعرض إلا لمن يملك صلاحية رؤية الصف أصلًا. `mock_server.py` يخزّن الملف محليًا كـ `data:` URL بدل Drive، للتطوير فقط.
+- الاعتماد/الرفض (`reviewDocument`): حصري للمقيّم المباشر لصاحب المستند (`managerId == evaluatorId`) أو الإدارة/المدير. الحمولة: `{id, status(approved|rejected), note}`.
+- القراءة (`listDocuments`): الكاتب يرى مستنداته فقط، والمقيّم يرى مستنداته هو (إن كان كاتبًا أيضًا) + مستندات تقاريره المباشرين، والإدارة ترى الكل.
 
 ### AuditLog
 `id, timestamp, actorRole, actorName, action, targetType, targetId, details`
 
 ## قواعد الخصوصية (تُطبَّق في الخادم لا في الواجهة فقط)
 - **كاتب**: يرى وي‌عدّل فقط صفوفه الخاصة (`employeeId == self`) في WorkLog/BehavioralLog، ويقرأ EvalScores الخاصة به فقط إذا `status == approved`، ويكتب فقط `selfAssessment`.
-- **مقيّم**: يرى ويعدّل صفوف موظفيه المباشرين فقط (`managerId == self`) + صفوفه هو كـ"كاتب" إن كان يملك صفة كاتب أيضًا.
+- **مقيّم**: يرى ويعدّل صفوف موظفيه المباشرين فقط (`managerId == self`) + صفوفه هو كـ"كاتب" إن كان يملك صفة كاتب أيضًا. **إصلاح**: `asWriter`/`asEvaluator` يُبنَيان على صفات الموظف الفعلية (`isWriter`/`isEvaluator`)، لا على أي كود بعينه استُخدم لتسجيل الدخول — سابقًا كان موظف يحمل الصفتين معًا (كاتب أول + مقيّم) يفقد صلاحياته ككاتب عند الدخول بكود المقيّم (والعكس)، لأن `resolveActor_`/`handleLogin_` كانا يقارنان الكود المُستخدَم بـ`writerCode`/`evaluatorCode` تحديدًا بدل الاكتفاء بالتحقق من هوية الموظف عبر `findEmployeeByCode_`.
 - **إدارة عامة**: صلاحية كاملة على Employees/Settings/AuditLog، لكن **لا** تحصل على تفاصيل EvalScores (المعايير والتعليقات) إلا إذا أرفقت أيضًا كود المقيّم صاحب العلاقة ضمن `auth.code` — فقط الحالة/الإجمالي/التصنيف تظهر لها للمتابعة.
 - **المدير (بند 2.2)**: الموظف الذي لا مدير فوقه (`managerId: null`) — وهو "أعلى مقيّم" في التسلسل الهرمي — يكتسب تلقائيًا صلاحيات الإدارة العامة التشغيلية (Employees CRUD، Settings، قراءة AuditLog)، إضافةً لما يملكه أصلًا كمقيّم (رؤية تفاصيل تقييمات كامل تسلسله الهرمي دون حجب). هذا مُنفَّذ عبر علم منفصل `actor.isOrgAdmin` (وليس `actor.isAdmin` الذي يبقى محصورًا حصرًا بتسجيل الدخول بكلمة مرور الإدارة العامة) — بهذا يبقى قيد الخصوصية أعلاه على "الإدارة العامة" سليمًا تمامًا: منح المدير صلاحيات تشغيلية إضافية لا يعني أبدًا أن الإدارة العامة صارت ترى تفاصيل التقييمات. الاستثناء الوحيد: تغيير كلمة مرور الإدارة العامة (`changeAdminPassword`) يبقى محصورًا بـ`isAdmin` فقط — لم يُمنح للمدير لأنه تدوير بيانات اعتماد حسّاس، ويمكن تغيير هذا لاحقًا بطلب صريح.
 
