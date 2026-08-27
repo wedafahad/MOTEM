@@ -80,8 +80,10 @@ def resolve_actor(db, auth):
     emp = find_employee_by_code(db, code)
     if not emp or not emp.get("active", True):
         raise ApiError("الكود غير صحيح أو الحساب غير مُفعّل", 401)
-    is_writer = emp.get("isWriter") and emp.get("writerCode") == code
-    is_evaluator = emp.get("isEvaluator") and emp.get("evaluatorCode") == code
+    # إصلاح: الصلاحيات تُبنى على صفات الموظف الفعلية (isWriter/isEvaluator)، لا على أي كود بعينه
+    # استُخدم للدخول — موظف يحمل الصفتين معًا (كاتب + مقيّم) يحصل على كل صلاحياته بأي من كوديه.
+    is_writer = bool(emp.get("isWriter"))
+    is_evaluator = bool(emp.get("isEvaluator"))
     # دمج 2.2: أعلى مقيّم في التسلسل الهرمي (بلا مدير فوقه) يكتسب صلاحيات الإدارة العامة
     # التشغيلية، دون أن يصبح isAdmin=True (حتى لا تنكسر خصوصية تفاصيل التقييمات).
     is_top_manager = bool(emp.get("isEvaluator") and not emp.get("managerId"))
@@ -110,8 +112,8 @@ def handle_login(db, payload):
     emp = find_employee_by_code(db, code)
     if not emp or not emp.get("active", True):
         raise ApiError("الكود غير صحيح", 401)
-    as_writer = emp.get("writerCode") == code
-    as_evaluator = emp.get("evaluatorCode") == code
+    as_writer = bool(emp.get("isWriter"))
+    as_evaluator = bool(emp.get("isEvaluator"))
     return {
         "employee": {k: v for k, v in emp.items() if k not in ("writerCode", "evaluatorCode")},
         "asWriter": as_writer,
@@ -431,13 +433,22 @@ def handle_approve_eval(db, actor, payload):
 
 
 def handle_get_settings(db, actor):
-    return db["settings"]
+    # ترميم دفاعي: pillars/classification مفقودة أو فارغة (خلية فاضية بالشيت الأصلي، JSON تالف جزئيًا)
+    # تُستبدل بمصفوفة فارغة بدل كسر كل شاشة تعتمد عليها — لا يوجد DEFAULT_SETTINGS_ محلي هنا لإعادة بذر
+    # الركائز الكاملة كما في Code.gs، فهذا ترميم أبسط (تجنّب الانهيار) وليس استرجاعًا كاملًا للقيم الافتراضية.
+    settings = db.get("settings") or {}
+    settings.setdefault("pillars", [])
+    settings.setdefault("classification", [])
+    db["settings"] = settings
+    return settings
 
 
 def handle_set_settings(db, actor, payload):
     if not actor.get("isOrgAdmin"):
         raise ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403)
-    new_settings = payload["settings"]
+    new_settings = payload.get("settings")
+    if not new_settings or not isinstance(new_settings.get("pillars"), list) or not new_settings["pillars"]:
+        raise ApiError("رفض الحفظ: الإعدادات المُرسَلة لا تحتوي ركائز تقييم صالحة (pillars فارغة أو مفقودة)", 400)
     new_settings["adminPassword"] = db["settings"]["adminPassword"]
     db["settings"] = new_settings
     audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
@@ -483,14 +494,122 @@ def compute_category_subtotal(row, employee, settings, category):
     return weighted_sum / weight_total if weight_total > 0 else None
 
 
+DOCUMENT_TYPES = ("course", "initiative", "interaction")
+MAX_DOCUMENT_BYTES = 8 * 1024 * 1024  # 8MB بعد فك ترميز base64
+
+
+def _documents(db):
+    db.setdefault("documents", [])
+    return db["documents"]
+
+
+def handle_list_documents(db, actor, payload):
+    target_employee_id = (payload or {}).get("employeeId")
+    rows = _documents(db)
+    if actor["isAdmin"]:
+        return [r for r in rows if r["employeeId"] == target_employee_id] if target_employee_id else rows
+    me = actor["employee"]
+    allowed_ids = set()
+    if actor["asWriter"]:
+        allowed_ids.add(me["id"])
+    if actor["asEvaluator"]:
+        allowed_ids.update(r["id"] for r in direct_reports(db, me["id"]))
+    if target_employee_id and target_employee_id not in allowed_ids:
+        raise ApiError("لا تملكين صلاحية الاطّلاع على مستندات هذا الموظف", 403)
+    rows = [r for r in rows if r["employeeId"] in allowed_ids]
+    return [r for r in rows if r["employeeId"] == target_employee_id] if target_employee_id else rows
+
+
+def handle_upload_document(db, actor, payload):
+    employee_id = payload.get("employeeId")
+    if not employee_id:
+        raise ApiError("الموظف مطلوب", 400)
+    me = actor.get("employee")
+    is_self = actor["asWriter"] and me and me["id"] == employee_id
+    is_direct_report = actor["asEvaluator"] and me and any(r["id"] == employee_id for r in direct_reports(db, me["id"]))
+    if not actor["isAdmin"] and not is_self and not is_direct_report:
+        raise ApiError("لا تملكين صلاحية الرفع لهذا الموظف", 403)
+    if payload.get("docType") not in DOCUMENT_TYPES:
+        raise ApiError("نوع مستند غير صالح", 400)
+    data_b64 = payload.get("dataBase64")
+    if not data_b64:
+        raise ApiError("الملف مطلوب", 400)
+    import base64
+    try:
+        raw = base64.b64decode(data_b64)
+    except Exception:
+        raise ApiError("ترميز الملف غير صالح", 400)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise ApiError("حجم الملف يتجاوز الحد الأقصى (8MB)", 400)
+    now = now_iso()
+    mime_type = payload.get("mimeType") or "application/octet-stream"
+    # للتطوير المحلي فقط: يُخزَّن الملف كـ data: URL بدل رفعه فعليًا لـ Drive (ذلك حصري لـ Code.gs).
+    row = {
+        "id": str(uuid.uuid4()), "employeeId": employee_id, "docType": payload["docType"],
+        "fileName": payload.get("fileName") or "مستند", "mimeType": mime_type,
+        "driveFileId": "", "driveUrl": f"data:{mime_type};base64,{data_b64}",
+        "status": "pending", "reviewedBy": "", "reviewNote": "",
+        "uploadedAt": now, "updatedAt": now,
+    }
+    _documents(db).append(row)
+    actor_role = "admin" if actor["isAdmin"] else ("manager" if actor.get("isOrgAdmin") else "evaluator" if actor["asEvaluator"] else "writer")
+    audit(db, actor_role, "الإدارة" if actor["isAdmin"] else actor["employee"]["name"], "رفع مستند", "Documents", row["id"], row["fileName"])
+    return row
+
+
+def handle_delete_document(db, actor, payload):
+    rows = _documents(db)
+    doc = next((d for d in rows if d["id"] == payload["id"]), None)
+    if not doc:
+        raise ApiError("المستند غير موجود", 404)
+    me = actor.get("employee")
+    is_owner = actor["asWriter"] and me and me["id"] == doc["employeeId"]
+    is_direct_manager = actor["asEvaluator"] and me and any(r["id"] == doc["employeeId"] for r in direct_reports(db, me["id"]))
+    if not actor["isAdmin"] and not is_owner and not is_direct_manager:
+        raise ApiError("لا تملكين صلاحية حذف هذا المستند", 403)
+    db["documents"] = [d for d in rows if d["id"] != payload["id"]]
+    return {"deleted": payload["id"]}
+
+
+def handle_review_document(db, actor, payload):
+    doc = next((d for d in _documents(db) if d["id"] == payload["id"]), None)
+    if not doc:
+        raise ApiError("المستند غير موجود", 404)
+    emp = next((e for e in db["employees"] if e["id"] == doc["employeeId"]), None)
+    me = actor.get("employee")
+    is_direct_manager = actor["asEvaluator"] and me and emp and emp.get("managerId") == me["id"]
+    if not actor.get("isOrgAdmin") and not is_direct_manager:
+        raise ApiError("فقط المقيّم المباشر أو الإدارة/المدير يعتمدون المستندات", 403)
+    if payload.get("status") not in ("approved", "rejected"):
+        raise ApiError("حالة غير صالحة", 400)
+    doc["status"] = payload["status"]
+    doc["reviewedBy"] = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
+    doc["reviewNote"] = payload.get("note") or ""
+    doc["updatedAt"] = now_iso()
+    audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
+          "اعتماد مستند" if payload["status"] == "approved" else "رفض مستند", "Documents", doc["id"], emp["name"] if emp else doc["employeeId"])
+    return doc
+
+
+def _top_performer_writers_scope(db, actor):
+    """الإدارة العامة أو المدير (isOrgAdmin) ينشران على مستوى الشركة كاملة، وأي مقيّم آخر ينشر على
+    نطاق فريقه (تسلسله الهرمي/downline) فقط."""
+    all_writers = [e for e in db["employees"] if e.get("isWriter")]
+    if actor["isAdmin"] or actor.get("isOrgAdmin"):
+        return all_writers
+    me = actor["employee"]
+    downline = downline_ids(db, me["id"])
+    return [e for e in all_writers if e["id"] in downline or e["id"] == me["id"]]
+
+
 def handle_publish_top_performer(db, actor, payload):
-    if not actor.get("isOrgAdmin"):
-        raise ApiError("فقط الإدارة العامة أو المدير ينشران هذا القسم", 403)
+    if not actor.get("isOrgAdmin") and not actor.get("asEvaluator"):
+        raise ApiError("فقط الإدارة العامة أو المقيّم/المدير ينشرون هذا القسم", 403)
     quarter = payload.get("quarter")
     if not quarter:
         raise ApiError("الربع مطلوب", 400)
     settings = db["settings"]
-    writers_by_id = {e["id"]: e for e in db["employees"] if e.get("isWriter")}
+    writers_by_id = {e["id"]: e for e in _top_performer_writers_scope(db, actor)}
     eval_rows = [r for r in db["evalScores"] if r.get("quarter") == quarter and r.get("status") == "approved" and r.get("employeeId") in writers_by_id]
 
     def pick_best(fn):
@@ -505,6 +624,7 @@ def handle_publish_top_performer(db, actor, payload):
         return {"employeeId": best["employeeId"], "name": best["name"]} if best else None  # بالاسم فقط
 
     actor_name = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
+    actor_role = "admin" if actor["isAdmin"] else ("manager" if actor.get("isOrgAdmin") else "evaluator")
     result = {
         "quarter": quarter,
         "technical": pick_best(lambda r, e: compute_category_subtotal(r, e, settings, "technical")),
@@ -514,7 +634,7 @@ def handle_publish_top_performer(db, actor, payload):
         "publishedAt": now_iso(),
     }
     settings["topPerformerPublished"] = result
-    audit(db, "admin" if actor["isAdmin"] else "manager", actor_name, "نشر موظف الربع", "System", quarter,
+    audit(db, actor_role, actor_name, "نشر موظف الربع", "System", quarter,
           " / ".join(filter(None, [result["technical"] and result["technical"]["name"],
                                     result["behavioral"] and result["behavioral"]["name"],
                                     result["overall"] and result["overall"]["name"]])))
@@ -522,10 +642,11 @@ def handle_publish_top_performer(db, actor, payload):
 
 
 def handle_unpublish_top_performer(db, actor):
-    if not actor.get("isOrgAdmin"):
-        raise ApiError("فقط الإدارة العامة أو المدير يلغيان النشر", 403)
+    if not actor.get("isOrgAdmin") and not actor.get("asEvaluator"):
+        raise ApiError("فقط الإدارة العامة أو المقيّم/المدير يلغون النشر", 403)
     db["settings"]["topPerformerPublished"] = None
-    audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
+    actor_role = "admin" if actor["isAdmin"] else ("manager" if actor.get("isOrgAdmin") else "evaluator")
+    audit(db, actor_role, "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],
           "إلغاء نشر موظف الربع", "System", "-", "")
     return {"ok": True}
 
@@ -581,6 +702,14 @@ def dispatch(action, auth, payload):
                 result = handle_publish_top_performer(db, actor, payload)
             elif action == "unpublishTopPerformer":
                 result = handle_unpublish_top_performer(db, actor)
+            elif action == "listDocuments":
+                result = handle_list_documents(db, actor, payload)
+            elif action == "uploadDocument":
+                result = handle_upload_document(db, actor, payload)
+            elif action == "deleteDocument":
+                result = handle_delete_document(db, actor, payload)
+            elif action == "reviewDocument":
+                result = handle_review_document(db, actor, payload)
             else:
                 raise ApiError(f"إجراء غير معروف: {action}", 400)
         save_db(db)

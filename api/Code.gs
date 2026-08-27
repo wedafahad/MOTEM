@@ -14,6 +14,7 @@ const SHEET_NAMES = {
   EVAL: "EvalScores",
   SETTINGS: "Settings",
   AUDIT: "AuditLog",
+  DOCUMENTS: "Documents",
 };
 
 const HEADERS = {
@@ -31,7 +32,12 @@ const HEADERS = {
     "selfAssessmentStatus", "selfAssessmentSubmittedAt"],
   Settings: ["key", "value"],
   AuditLog: ["id", "timestamp", "actorRole", "actorName", "action", "targetType", "targetId", "details"],
+  Documents: ["id", "employeeId", "docType", "fileName", "mimeType", "driveFileId", "driveUrl",
+    "status", "reviewedBy", "reviewNote", "uploadedAt", "updatedAt"],
 };
+
+// مرحلة ٤ — توثيق الكاتب: أنواع المستندات الداعمة المرتبطة بمعايير تقييم فعلية (لا تدخل الحساب تلقائيًا).
+const DOCUMENT_TYPES = ["course", "initiative", "interaction"];
 
 const JSON_COLUMNS = {
   WorkLog: { collaboratorsJSON: "collaborators", socialSubTypesJSON: "socialSubTypes" },
@@ -159,12 +165,34 @@ function findOne_(sheetName, predicate) {
 function getSettings_() {
   const rows = readAll_(SHEET_NAMES.SETTINGS);
   const row = rows.find((r) => r.key === "config");
-  if (!row) {
+  if (!row || !row.value) {
     const seeded = DEFAULT_SETTINGS_();
     upsertRow_(SHEET_NAMES.SETTINGS, { key: "config", value: JSON.stringify(seeded) }, "key");
     return seeded;
   }
-  return JSON.parse(row.value);
+  let settings;
+  try {
+    settings = JSON.parse(row.value);
+  } catch (e) {
+    settings = DEFAULT_SETTINGS_();
+    upsertRow_(SHEET_NAMES.SETTINGS, { key: "config", value: JSON.stringify(settings) }, "key");
+    return settings;
+  }
+  // ترميم ذاتي: حالة تكون فيها pillars/classification مفقودة أو فاسدة أو فارغة (خلية فاضية، حذف
+  // غير مقصود، JSON تالف جزئيًا) تُرجع للقيم الافتراضية وتُحفَظ، دون المساس بأي حقل آخر سليم.
+  let healed = false;
+  if (!Array.isArray(settings.pillars) || settings.pillars.length === 0) {
+    settings.pillars = DEFAULT_SETTINGS_().pillars;
+    healed = true;
+  }
+  if (!Array.isArray(settings.classification) || settings.classification.length === 0) {
+    settings.classification = DEFAULT_SETTINGS_().classification;
+    healed = true;
+  }
+  if (healed) {
+    upsertRow_(SHEET_NAMES.SETTINGS, { key: "config", value: JSON.stringify(settings) }, "key");
+  }
+  return settings;
 }
 
 function setSettings_(settings) {
@@ -223,12 +251,14 @@ function resolveActor_(auth) {
   // حتى لا تنكسر خصوصية تفاصيل التقييمات (canSeeEvalDetail_ / handleListEval_ تعتمدان على
   // asEvaluator + downlineIds_، لا على isOrgAdmin، فتبقى رؤية المدير لتفاصيل تقييمات فريقه كما هي).
   const isTopManager = !!(emp.isEvaluator && !emp.managerId);
+  // إصلاح: الصلاحيات تُبنى على صفات الموظف الفعلية (isWriter/isEvaluator)، لا على أي كود بعينه استُخدم
+  // للدخول — موظف يحمل الصفتين معًا (كاتب + مقيّم) يحصل على كل صلاحياته بأي من كوديه.
   return {
     isAdmin: false,
     isOrgAdmin: isTopManager,
     employee: emp,
-    asWriter: !!(emp.isWriter && emp.writerCode === auth.code),
-    asEvaluator: !!(emp.isEvaluator && emp.evaluatorCode === auth.code),
+    asWriter: !!emp.isWriter,
+    asEvaluator: !!emp.isEvaluator,
   };
 }
 
@@ -241,8 +271,8 @@ function handleLogin_(payload) {
   Object.keys(emp).forEach((k) => { if (k !== "writerCode" && k !== "evaluatorCode") clean[k] = emp[k]; });
   return {
     employee: clean,
-    asWriter: emp.writerCode === payload.code,
-    asEvaluator: emp.evaluatorCode === payload.code,
+    asWriter: !!emp.isWriter,
+    asEvaluator: !!emp.isEvaluator,
   };
 }
 
@@ -534,6 +564,9 @@ function handleSetSettings_(actor, payload) {
   if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403);
   const current = getSettings_();
   const next = payload.settings;
+  if (!next || !Array.isArray(next.pillars) || next.pillars.length === 0) {
+    throw new ApiError("رفض الحفظ: الإعدادات المُرسَلة لا تحتوي ركائز تقييم صالحة (pillars فارغة أو مفقودة)", 400);
+  }
   next.adminPassword = current.adminPassword;
   setSettings_(next);
   audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "تحديث إعدادات المعايير", "Settings", "-", "");
@@ -552,6 +585,104 @@ function handleChangeAdminPassword_(actor, payload) {
 function handleListAudit_(actor) {
   if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يريان سجل التعديلات", 403);
   return readAll_(SHEET_NAMES.AUDIT).reverse();
+}
+
+// ============================= مرحلة ٤ — مستندات الكاتب (توثيق داعم) =============================
+// نفس نمط الخصوصية المطبَّق على WorkLog: الكاتب يرى مستنداته فقط، والمقيّم يرى مستندات تقاريره المباشرين
+// ويعتمدها، ونطاق القراءة الأوسع (downline) متاح فقط عبر readableWorkIds_ إن احتجناه لاحقًا للمراجعة الموسّعة.
+
+const DOCUMENTS_FOLDER_PROP = "DOCUMENTS_FOLDER_ID";
+const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024; // 8MB بعد فك ترميز base64
+
+function getOrCreateDocumentsFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const existingId = props.getProperty(DOCUMENTS_FOLDER_PROP);
+  if (existingId) {
+    try { return DriveApp.getFolderById(existingId); } catch (e) { /* المجلد حُذف يدويًا — أنشئي واحدًا جديدًا */ }
+  }
+  const folder = DriveApp.createFolder("متم — مستندات الكتّاب");
+  props.setProperty(DOCUMENTS_FOLDER_PROP, folder.getId());
+  return folder;
+}
+
+function saveDocumentFile_(fileName, mimeType, dataBase64) {
+  const bytes = Utilities.base64Decode(dataBase64);
+  if (bytes.length > MAX_DOCUMENT_BYTES) throw new ApiError("حجم الملف يتجاوز الحد الأقصى (8MB)", 400);
+  const blob = Utilities.newBlob(bytes, mimeType || "application/octet-stream", fileName || "مستند");
+  const folder = getOrCreateDocumentsFolder_();
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { driveFileId: file.getId(), driveUrl: file.getUrl() };
+}
+
+/** الكاتب يرى مستنداته فقط. المقيّم يرى مستندات تقاريره المباشرين + مستنداته هو إن كان كاتبًا أيضًا. */
+function handleListDocuments_(actor, payload) {
+  const targetEmployeeId = payload && payload.employeeId;
+  let rows = readAll_(SHEET_NAMES.DOCUMENTS);
+  if (actor.isAdmin) {
+    return targetEmployeeId ? rows.filter((r) => r.employeeId === targetEmployeeId) : rows;
+  }
+  const allowedIds = {};
+  if (actor.asWriter) allowedIds[actor.employee.id] = true;
+  if (actor.asEvaluator) directReports_(actor.employee.id).forEach((r) => { allowedIds[r.id] = true; });
+  if (targetEmployeeId && !allowedIds[targetEmployeeId]) throw new ApiError("لا تملكين صلاحية الاطّلاع على مستندات هذا الموظف", 403);
+  rows = rows.filter((r) => allowedIds[r.employeeId]);
+  return targetEmployeeId ? rows.filter((r) => r.employeeId === targetEmployeeId) : rows;
+}
+
+/** الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة. */
+function handleUploadDocument_(actor, payload) {
+  const employeeId = payload.employeeId;
+  if (!employeeId) throw new ApiError("الموظف مطلوب", 400);
+  const isSelf = actor.asWriter && actor.employee.id === employeeId;
+  const isDirectReport = actor.asEvaluator && directReports_(actor.employee.id).some((r) => r.id === employeeId);
+  if (!actor.isAdmin && !isSelf && !isDirectReport) throw new ApiError("لا تملكين صلاحية الرفع لهذا الموظف", 403);
+  if (DOCUMENT_TYPES.indexOf(payload.docType) === -1) throw new ApiError("نوع مستند غير صالح", 400);
+  if (!payload.dataBase64) throw new ApiError("الملف مطلوب", 400);
+  const saved = saveDocumentFile_(payload.fileName, payload.mimeType, payload.dataBase64);
+  const now = nowIso();
+  const row = {
+    id: newId(), employeeId: employeeId, docType: payload.docType,
+    fileName: payload.fileName || "مستند", mimeType: payload.mimeType || "",
+    driveFileId: saved.driveFileId, driveUrl: saved.driveUrl,
+    status: "pending", reviewedBy: "", reviewNote: "",
+    uploadedAt: now, updatedAt: now,
+  };
+  upsertRow_(SHEET_NAMES.DOCUMENTS, row);
+  audit_(actor.isAdmin ? "admin" : actor.isOrgAdmin ? "manager" : actor.asEvaluator ? "evaluator" : "writer",
+    actor.isAdmin ? "الإدارة" : actor.employee.name, "رفع مستند", "Documents", row.id, row.fileName);
+  return row;
+}
+
+function handleDeleteDocument_(actor, payload) {
+  const doc = findOne_(SHEET_NAMES.DOCUMENTS, (d) => d.id === payload.id);
+  if (!doc) throw new ApiError("المستند غير موجود", 404);
+  const isOwner = actor.asWriter && actor.employee.id === doc.employeeId;
+  const isDirectManager = actor.asEvaluator && directReports_(actor.employee.id).some((r) => r.id === doc.employeeId);
+  if (!actor.isAdmin && !isOwner && !isDirectManager) throw new ApiError("لا تملكين صلاحية حذف هذا المستند", 403);
+  try { if (doc.driveFileId) DriveApp.getFileById(doc.driveFileId).setTrashed(true); } catch (e) { /* الملف محذوف مسبقًا من Drive */ }
+  deleteRow_(SHEET_NAMES.DOCUMENTS, payload.id);
+  return { deleted: payload.id };
+}
+
+/** الاعتماد/الرفض حصري للمقيّم المباشر لصاحب المستند أو الإدارة/المدير. */
+function handleReviewDocument_(actor, payload) {
+  const doc = findOne_(SHEET_NAMES.DOCUMENTS, (d) => d.id === payload.id);
+  if (!doc) throw new ApiError("المستند غير موجود", 404);
+  const emp = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === doc.employeeId);
+  const isDirectManager = actor.asEvaluator && emp && emp.managerId === actor.employee.id;
+  if (!actor.isOrgAdmin && !isDirectManager) throw new ApiError("فقط المقيّم المباشر أو الإدارة/المدير يعتمدون المستندات", 403);
+  if (["approved", "rejected"].indexOf(payload.status) === -1) throw new ApiError("حالة غير صالحة", 400);
+  const merged = Object.assign({}, doc, {
+    status: payload.status,
+    reviewedBy: actor.isAdmin ? "الإدارة" : actor.employee.name,
+    reviewNote: payload.note || "",
+    updatedAt: nowIso(),
+  });
+  upsertRow_(SHEET_NAMES.DOCUMENTS, merged);
+  audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name,
+    payload.status === "approved" ? "اعتماد مستند" : "رفض مستند", "Documents", doc.id, emp ? emp.name : doc.employeeId);
+  return merged;
 }
 
 // ============================= موظف الربع — نشر بالاسم فقط (بديل بند 3.3 للموظفين) =============================
@@ -576,14 +707,23 @@ function computeCategorySubtotal_(row, employee, settings, category) {
   return weightTotal > 0 ? weightedSum / weightTotal : null;
 }
 
-/** الإدارة العامة أو المدير فقط يقرران النشر — تصريح من الحساب صاحب القرار، لا مجرد عرض بيانات. */
+/** الإدارة العامة أو المدير (isOrgAdmin) ينشران على مستوى الشركة كاملة، وأي مقيّم آخر ينشر على
+ * نطاق فريقه (تسلسله الهرمي/downline) فقط — نفس نطاق readableWorkIds_ المطبَّق على WorkLog/Documents. */
+function topPerformerWritersScope_(actor) {
+  const all = readAll_(SHEET_NAMES.EMPLOYEES).filter((e) => e.isWriter);
+  if (actor.isAdmin || actor.isOrgAdmin) return all;
+  const downline = downlineIds_(actor.employee.id);
+  return all.filter((e) => downline.indexOf(e.id) !== -1 || e.id === actor.employee.id);
+}
+
+/** الإدارة العامة، المدير، وأي مقيّم يقررون النشر — كل ضمن نطاق فريقه (انظر topPerformerWritersScope_). */
 function handlePublishTopPerformer_(actor, payload) {
-  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير ينشران هذا القسم", 403);
+  if (!actor.isOrgAdmin && !actor.asEvaluator) throw new ApiError("فقط الإدارة العامة أو المقيّم/المدير ينشرون هذا القسم", 403);
   const quarter = payload.quarter;
   if (!quarter) throw new ApiError("الربع مطلوب", 400);
   const settings = getSettings_();
   const writersById = {};
-  readAll_(SHEET_NAMES.EMPLOYEES).forEach((e) => { if (e.isWriter) writersById[e.id] = e; });
+  topPerformerWritersScope_(actor).forEach((e) => { writersById[e.id] = e; });
   const evalRows = readAll_(SHEET_NAMES.EVAL).filter((r) => r.quarter === quarter && r.status === "approved" && writersById[r.employeeId]);
 
   const pickBest = (fn) => {
@@ -598,6 +738,7 @@ function handlePublishTopPerformer_(actor, payload) {
   };
 
   const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
+  const actorRole = actor.isAdmin ? "admin" : actor.isOrgAdmin ? "manager" : "evaluator";
   const result = {
     quarter: quarter,
     technical: pickBest((r, e) => computeCategorySubtotal_(r, e, settings, "technical")),
@@ -608,17 +749,18 @@ function handlePublishTopPerformer_(actor, payload) {
   };
   settings.topPerformerPublished = result;
   setSettings_(settings);
-  audit_(actor.isAdmin ? "admin" : "manager", actorName, "نشر موظف الربع", "System", quarter,
+  audit_(actorRole, actorName, "نشر موظف الربع", "System", quarter,
     [result.technical?.name, result.behavioral?.name, result.overall?.name].filter(Boolean).join(" / "));
   return result;
 }
 
 function handleUnpublishTopPerformer_(actor) {
-  if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يلغيان النشر", 403);
+  if (!actor.isOrgAdmin && !actor.asEvaluator) throw new ApiError("فقط الإدارة العامة أو المقيّم/المدير يلغون النشر", 403);
   const settings = getSettings_();
   settings.topPerformerPublished = null;
   setSettings_(settings);
-  audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "إلغاء نشر موظف الربع", "System", "-", "");
+  const actorRole = actor.isAdmin ? "admin" : actor.isOrgAdmin ? "manager" : "evaluator";
+  audit_(actorRole, actor.isAdmin ? "الإدارة" : actor.employee.name, "إلغاء نشر موظف الربع", "System", "-", "");
   return { ok: true };
 }
 
@@ -655,6 +797,10 @@ function dispatch_(action, auth, payload) {
       case "listAudit": data = handleListAudit_(actor); break;
       case "publishTopPerformer": data = handlePublishTopPerformer_(actor, payload); break;
       case "unpublishTopPerformer": data = handleUnpublishTopPerformer_(actor); break;
+      case "listDocuments": data = handleListDocuments_(actor, payload); break;
+      case "uploadDocument": data = handleUploadDocument_(actor, payload); break;
+      case "deleteDocument": data = handleDeleteDocument_(actor, payload); break;
+      case "reviewDocument": data = handleReviewDocument_(actor, payload); break;
       default: throw new ApiError("إجراء غير معروف: " + action, 400);
     }
     return { ok: true, data: data };

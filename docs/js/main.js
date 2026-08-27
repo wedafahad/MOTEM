@@ -221,7 +221,9 @@ function navItemsFor(session) {
     // "سجل الأعمال" هنا يعرض فريقك المباشر فقط — للمدير (أعلى الهرم) هذا مُتضمَّن بالكامل أصلًا في
     // "سجل أعمال الموظفين" الأشمل بالأسفل (كل الكتّاب)، فيُستبعَد له تحديدًا تفاديًا للتكرار.
     if (!isTopManager) items.push(["worklog", "سجل الأعمال"]);
-    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"]);
+    // مرحلة ٤ — أي مقيّم (لا فقط المدير) يعتمد مستندات تقاريره المباشرين (نفس صلاحية reviewDocument بالخادم).
+    items.push(["team-documents", "مستندات الفريق"]);
+    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
     // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية.
     if (isTopManager) {
       items.push(["overview", "نظرة عامة"], ["employees", "الموظفون"], ["admin-worklog", "سجل أعمال الموظفين"],
@@ -230,7 +232,7 @@ function navItemsFor(session) {
     items.push(["export", "التصدير"]);
     return items;
   }
-  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"]];
+  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]];
 }
 
 // شاشات "تفاصيل" صالحة لكن غير مدرَجة في القائمة الجانبية (يُفتَح عليها من زر داخل شاشة أخرى، لا من التنقّل المباشر)
@@ -290,6 +292,8 @@ function renderView() {
     settings: renderSettingsView,
     audit: renderAuditView,
     export: renderExportView,
+    documents: renderMyDocumentsView,
+    "team-documents": renderTeamDocumentsView,
   };
   (map[App.view] || renderDashboardView)(el).catch((err) => {
     el.innerHTML = `<div class="error-box">${esc(err.message)}</div>`;
@@ -395,6 +399,145 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
 }
 
 function renderMyWorkLogView(el) { return renderWorkLogView(el, App.session.employee.id, "سجل أعمالي"); }
+
+/* =========================== مرحلة ٤ — مستندات الكاتب (توثيق داعم) =========================== */
+const DOCUMENT_TYPES = [
+  { id: "course", label: "دورة" },
+  { id: "initiative", label: "مبادرة" },
+  { id: "interaction", label: "توثيق تفاعل" },
+];
+const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024; // 8MB — يطابق الحد الأقصى على الخادم
+
+function docTypeLabel(id) { return DOCUMENT_TYPES.find((t) => t.id === id)?.label || id; }
+
+function docStatusBadge(status) {
+  const map = {
+    pending: ["بانتظار المراجعة", "badge-pending"],
+    approved: ["مُعتمَد", "badge-approved"],
+    rejected: ["مرفوض", "badge-draft"],
+  };
+  const [label, cls] = map[status] || ["—", "badge-draft"];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+/** عرض عام لمستندات موظف واحد — تُستخدم لكل من "مستنداتي" (الكاتب لنفسه) و"مستندات الفريق" (المقيّم لأحد تقاريره). */
+async function renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview) {
+  const s = App.session;
+  const rows = await Api.call("listDocuments", { auth: authOf(s), payload: { employeeId: forEmployeeId } });
+  el.innerHTML = `
+  <div class="flex-between">
+    <h2>${readOnlyHeader || "مستنداتي"}</h2>
+    ${canReview ? "" : `<button class="btn btn-primary" id="addDocBtn">+ إضافة مستند</button>`}
+  </div>
+  <p class="small-muted">توثيق داعم مرتبط بمعايير التقييم (دورات، مبادرات، تفاعل جماعي) — لا يدخل حساب الدرجة تلقائيًا، يراجعه المقيّم يدويًا.</p>
+  <div class="card"><div class="table-wrap"><table>
+    <thead><tr><th>الملف</th><th>النوع</th><th>الحالة</th><th>تاريخ الرفع</th><th>ملاحظة المراجعة</th><th></th></tr></thead>
+    <tbody>${rows.map((d) => `<tr>
+      <td><a href="${d.driveUrl}" target="_blank" rel="noopener">${esc(d.fileName)}</a></td>
+      <td>${esc(docTypeLabel(d.docType))}</td>
+      <td>${docStatusBadge(d.status)}</td>
+      <td>${d.uploadedAt ? new Date(d.uploadedAt).toLocaleDateString("ar") : "—"}</td>
+      <td>${esc(d.reviewNote || "—")}</td>
+      <td class="gap-8">
+        ${canReview && d.status === "pending" ? `
+          <button class="btn btn-sm btn-primary approve-doc" data-id="${d.id}">اعتماد</button>
+          <button class="btn btn-sm btn-ghost reject-doc" data-id="${d.id}">رفض</button>` : ""}
+        ${!canReview ? `<button class="icon-btn text-danger del-doc" data-id="${d.id}">حذف</button>` : ""}
+      </td>
+    </tr>`).join("") || `<tr><td colspan="6" class="empty-state">لا توجد مستندات بعد</td></tr>`}</tbody>
+  </table></div></div>`;
+
+  const addBtn = document.getElementById("addDocBtn");
+  if (addBtn) addBtn.onclick = () => openDocumentModal(forEmployeeId, () => renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview));
+  el.querySelectorAll(".del-doc").forEach((b) => (b.onclick = async () => {
+    if (!confirm("تأكيد حذف هذا المستند؟")) return;
+    try {
+      await Api.call("deleteDocument", { auth: authOf(s), payload: { id: b.dataset.id } });
+      toast("تم الحذف");
+      renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview);
+    } catch (err) { toast(err.message); }
+  }));
+  el.querySelectorAll(".approve-doc").forEach((b) => (b.onclick = async () => {
+    try {
+      await Api.call("reviewDocument", { auth: authOf(s), payload: { id: b.dataset.id, status: "approved" } });
+      toast("تم الاعتماد");
+      renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview);
+    } catch (err) { toast(err.message); }
+  }));
+  el.querySelectorAll(".reject-doc").forEach((b) => (b.onclick = async () => {
+    const note = prompt("سبب الرفض (اختياري):") || "";
+    try {
+      await Api.call("reviewDocument", { auth: authOf(s), payload: { id: b.dataset.id, status: "rejected", note } });
+      toast("تم الرفض");
+      renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview);
+    } catch (err) { toast(err.message); }
+  }));
+}
+
+/** الكاتب: مستنداته الخاصة، برفع مباشر. */
+function renderMyDocumentsView(el) { return renderDocumentsView(el, App.session.employee.id, "مستنداتي", false); }
+
+/** المقيّم: يختار عضو فريقه المباشر ويرى/يعتمد مستنداته. */
+async function renderTeamDocumentsView(el) {
+  const s = App.session;
+  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  const reports = employees.filter((e) => e.managerId === s.employee.id);
+  if (!reports.length) { el.innerHTML = `<div class="empty-state">لا يوجد أعضاء فريق مباشرين مسجّلين بعد</div>`; return; }
+  const currentId = App.teamDocsTargetId && reports.some((r) => r.id === App.teamDocsTargetId) ? App.teamDocsTargetId : reports[0].id;
+  App.teamDocsTargetId = currentId;
+  el.innerHTML = `<div class="flex-between"><h2>مستندات الفريق</h2>
+    <select id="teamDocsSel">${reports.map((r) => `<option value="${r.id}" ${r.id === currentId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>
+  </div><div id="teamDocsInner"></div>`;
+  const inner = document.getElementById("teamDocsInner");
+  await renderDocumentsView(inner, currentId, esc(reports.find((r) => r.id === currentId)?.name || ""), true);
+  document.getElementById("teamDocsSel").onchange = (e) => { App.teamDocsTargetId = e.target.value; renderTeamDocumentsView(el); };
+}
+
+function fileToBase64_(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",").pop());
+    reader.onerror = () => reject(new Error("تعذّرت قراءة الملف"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function openDocumentModal(employeeId, onSaved) {
+  const s = App.session;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+  <div class="modal">
+    <h3>إضافة مستند</h3>
+    <div class="field"><label>النوع</label><select id="f_docType">
+      ${DOCUMENT_TYPES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
+    </select></div>
+    <div class="field"><label>الملف</label><input type="file" id="f_docFile"></div>
+    <p class="small-muted">الحد الأقصى لحجم الملف 8MB.</p>
+    <div class="flex-between">
+      <button class="btn btn-ghost" id="cancelModal">إلغاء</button>
+      <button class="btn btn-primary" id="saveModal">رفع</button>
+    </div>
+  </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
+  backdrop.querySelector("#saveModal").onclick = async () => {
+    const fileInput = document.getElementById("f_docFile");
+    const file = fileInput.files[0];
+    if (!file) return toast("اختاري ملفًا أولًا");
+    if (file.size > MAX_DOCUMENT_BYTES) return toast("حجم الملف يتجاوز 8MB");
+    try {
+      const dataBase64 = await fileToBase64_(file);
+      await Api.call("uploadDocument", { auth: authOf(s), payload: {
+        employeeId, docType: document.getElementById("f_docType").value,
+        fileName: file.name, mimeType: file.type, dataBase64,
+      } });
+      toast("تم الرفع");
+      backdrop.remove();
+      onSaved();
+    } catch (err) { toast(err.message); }
+  };
+}
 
 // تصنيف أنواع الأعمال — نوع العمل ← أنواع الإجراء المتاحة له
 const WORK_CATEGORIES = [
@@ -876,8 +1019,14 @@ async function renderTeamView(el) {
   const myDownlineIds = clientDownlineIds(employees, s.employee.id);
   const pendingApprovals = evalRows.filter((e) => e.status === "submitted" && e.evaluatorId && e.evaluatorId !== s.employee.id && myDownlineIds.has(e.evaluatorId));
 
+  // "موظف الربع" — متاح الآن لأي مقيّم (لا فقط الإدارة/المدير)، بنطاق فريقه فعليًا (downline + نفسه إن
+  // كان كاتبًا)، مطابقًا تمامًا لنطاق topPerformerWritersScope_ على الخادم — يظهر دائمًا في "فريقي".
+  const myWriterScope = employees.filter((e) => e.isWriter && (e.id === s.employee.id || myDownlineIds.has(e.id)));
+  const topPerformersHtml = await topPerformerSectionHtml(s, myWriterScope);
+
   el.innerHTML = `
   <h2>فريقي — ${App.quarter}</h2>
+  ${topPerformersHtml}
   ${pendingApprovals.length ? `
   <div class="card">
     <h3>بانتظار اعتمادك</h3>
@@ -958,6 +1107,7 @@ async function renderTeamView(el) {
     App.view = "review";
     renderShell();
   }));
+  wireTopPerformerButtons(el, s, () => renderTeamView(el));
 }
 
 /* عرض قراءة فقط لتفاصيل تقييم موظف تحت إشراف غير مباشر (للتدقيق قبل الاعتماد) */
@@ -1246,16 +1396,13 @@ function topPerformerCardHtml(label, best) {
   </div>`;
 }
 
-async function renderAdminOverviewView(el) {
-  const s = App.session;
-  // موظف الربع الماضي (بند 3.3) — دائمًا للربع السابق فعليًا بغض النظر عن الربع المختار بالجدول أسفله
+/** بطاقة نشر/إلغاء نشر "موظف الربع الماضي" — مشتركة بين نظرة إدارة (كل الكتّاب) وشاشة "فريقي" لأي
+ * مقيّم (نطاقه فقط). تظهر دائمًا مع زر النشر، حتى قبل توفر أي تقييمات معتمدة — طلب صريح؛ لا تنتظر
+ * "طلوع الدرجات". النطاق الفعلي (من يُرشَّح) يُطبَّق أصلًا على الخادم حسب الفاعل (topPerformerWritersScope_). */
+async function topPerformerSectionHtml(s, writers) {
   const prevQuarter = Store.quarterOptions()[1];
-  const [employees, evalRows, prevEvalRows] = await Promise.all([
-    Api.call("listEmployees", { auth: authOf(s) }),
-    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
-    prevQuarter ? Api.call("listEval", { auth: authOf(s), payload: { quarter: prevQuarter } }) : Promise.resolve([]),
-  ]);
-  const writers = employees.filter((e) => e.isWriter);
+  if (!prevQuarter) return "";
+  const prevEvalRows = await Api.call("listEval", { auth: authOf(s), payload: { quarter: prevQuarter } });
   const approvedPrev = prevEvalRows.filter((e) => e.status === "approved");
   const withEmployee = approvedPrev.map((ev) => ({ ev, emp: writers.find((w) => w.id === ev.employeeId) })).filter((x) => x.emp);
   const pickBest = (valueFn) => {
@@ -1272,41 +1419,71 @@ async function renderAdminOverviewView(el) {
   const bestOverall = pickBest((ev) => (ev.totalScore === null || ev.totalScore === undefined ? null : ev.totalScore));
   const detailUnavailable = withEmployee.length > 0 && !bestTechnical && !bestBehavioral;
 
-  // النشر للموظفين (تحفيز، بالاسم فقط بلا رقم) — قرار يدوي عائد للإدارة العامة أو المدير، وليس تلقائيًا.
-  // مهم: "منشور فعليًا الآن" (isPublished) يختلف عن "يطابق ربع النشر الحالي" (isCurrent) — لو فيه نشر
-  // قديم من ربع سابق لم يُلغَ، يبقى ظاهرًا فعليًا للموظفين، فيجب ألا نعرض "غير منشور" بشكل مضلِّل.
   const published = App.settings.topPerformerPublished;
   const isPublished = !!published;
   const isCurrent = isPublished && published.quarter === prevQuarter;
   const isStale = isPublished && !isCurrent;
-  const publishControlsHtml = !withEmployee.length ? "" : `
+  const publishControlsHtml = `
     <div class="flex-between" style="margin-top:10px; flex-wrap:wrap; gap:10px">
       ${isCurrent
-        ? `<span class="badge badge-approved">منشور للفريق بالاسم فقط (بدون درجات)</span>`
+        ? `<span class="badge badge-approved">منشور بالاسم فقط (بدون درجات)</span>`
         : isStale
-        ? `<span class="badge badge-submitted">⚠️ منشور حاليًا للفريق لكن من ربع سابق (${esc(published.quarter)}) — حدّثيه أو ألغِه</span>`
-        : `<span class="small-muted">غير منشور للفريق بعد — يظهر لهم بالاسم فقط دون أي رقم.</span>`}
+        ? `<span class="badge badge-submitted">⚠️ منشور حاليًا لكن من ربع سابق (${esc(published.quarter)}) — حدّثيه أو ألغِه</span>`
+        : `<span class="small-muted">غير منشور بعد — يظهر بالاسم فقط دون أي رقم.</span>`}
       <div class="gap-8">
         ${isStale ? `<button class="btn btn-primary" id="topPerfPublishBtn" data-action="publish">تحديث النشر لهذا الربع</button>
         <button class="btn btn-ghost" id="topPerfUnpublishBtn" data-action="unpublish">إلغاء النشر</button>` : ""}
         ${isCurrent ? `<button class="btn btn-ghost" id="topPerfUnpublishBtn" data-action="unpublish">إلغاء النشر</button>` : ""}
-        ${!isPublished ? `<button class="btn btn-primary" id="topPerfPublishBtn" data-action="publish">📣 نشر موظف الربع للفريق</button>` : ""}
+        ${!isPublished ? `<button class="btn btn-primary" id="topPerfPublishBtn" data-action="publish">📣 نشر موظف الربع</button>` : ""}
       </div>
     </div>`;
 
-  const topPerformersHtml = !prevQuarter ? "" : `
+  return `
   <div class="card">
     <h3>موظف الربع الماضي <span class="small-muted">— ${esc(prevQuarter)}</span></h3>
     ${!withEmployee.length
-      ? `<p class="small-muted">لا توجد تقييمات مُعتمَدة لهذا الربع بعد.</p>`
+      ? `<p class="small-muted">لا توجد تقييمات مُعتمَدة لهذا الربع بعد ضمن نطاقك — يمكنك النشر لاحقًا حال توفرها.</p>`
       : `<div class="top-performer-grid">
           ${topPerformerCardHtml("الأعلى فنيًا", bestTechnical)}
           ${topPerformerCardHtml("الأعلى سلوكيًا", bestBehavioral)}
           ${topPerformerCardHtml("الأعلى كمجموع", bestOverall)}
         </div>
-        ${detailUnavailable ? `<p class="small-muted">تفصيل الفني/السلوكي غير متاح لهذا الحساب — الإدارة العامة ترى الدرجة الإجمالية فقط، حفاظًا على خصوصية التقييم.</p>` : ""}
-        ${publishControlsHtml}`}
+        ${detailUnavailable ? `<p class="small-muted">تفصيل الفني/السلوكي غير متاح لهذا الحساب — الإدارة العامة ترى الدرجة الإجمالية فقط، حفاظًا على خصوصية التقييم.</p>` : ""}`}
+    ${publishControlsHtml}
   </div>`;
+}
+
+/** ربط أزرار النشر/إلغاء النشر بعد إدراج topPerformerSectionHtml في innerHTML — لأي شاشة تستخدمها. */
+function wireTopPerformerButtons(el, s, rerender) {
+  const prevQuarter = Store.quarterOptions()[1];
+  const publishBtn = el.querySelector("#topPerfPublishBtn");
+  if (publishBtn) publishBtn.onclick = async () => {
+    try {
+      await Api.call("publishTopPerformer", { auth: authOf(s), payload: { quarter: prevQuarter } });
+      toast("نُشر بالاسم فقط");
+      App.settings = await Api.call("getSettings", { auth: authOf(s) });
+      rerender();
+    } catch (err) { toast(err.message); }
+  };
+  const unpublishBtn = el.querySelector("#topPerfUnpublishBtn");
+  if (unpublishBtn) unpublishBtn.onclick = async () => {
+    try {
+      await Api.call("unpublishTopPerformer", { auth: authOf(s) });
+      toast("أُلغي النشر");
+      App.settings = await Api.call("getSettings", { auth: authOf(s) });
+      rerender();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+async function renderAdminOverviewView(el) {
+  const s = App.session;
+  const [employees, evalRows] = await Promise.all([
+    Api.call("listEmployees", { auth: authOf(s) }),
+    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
+  ]);
+  const writers = employees.filter((e) => e.isWriter);
+  const topPerformersHtml = await topPerformerSectionHtml(s, writers);
 
   el.innerHTML = `
   <div class="flex-between"><h2>نظرة عامة — ${App.quarter}</h2>
@@ -1330,28 +1507,7 @@ async function renderAdminOverviewView(el) {
     App.view = "review";
     renderShell();
   }));
-  const publishBtn = document.getElementById("topPerfPublishBtn");
-  if (publishBtn) {
-    publishBtn.onclick = async () => {
-      try {
-        await Api.call("publishTopPerformer", { auth: authOf(s), payload: { quarter: prevQuarter } });
-        toast("نُشر للفريق بالاسم فقط");
-        App.settings = await Api.call("getSettings", { auth: authOf(s) });
-        renderAdminOverviewView(el);
-      } catch (err) { toast(err.message); }
-    };
-  }
-  const unpublishBtn = document.getElementById("topPerfUnpublishBtn");
-  if (unpublishBtn) {
-    unpublishBtn.onclick = async () => {
-      try {
-        await Api.call("unpublishTopPerformer", { auth: authOf(s) });
-        toast("أُلغي النشر");
-        App.settings = await Api.call("getSettings", { auth: authOf(s) });
-        renderAdminOverviewView(el);
-      } catch (err) { toast(err.message); }
-    };
-  }
+  wireTopPerformerButtons(el, s, () => renderAdminOverviewView(el));
 }
 
 /* =========================== إدارة: الموظفون =========================== */
