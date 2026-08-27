@@ -113,14 +113,42 @@ function objectToRow_(sheetName, headers, obj) {
   });
 }
 
+// كل استدعاء API يقرأ الشيت كاملًا من الصفر (لا توجد ذاكرة بين تنفيذين منفصلين لـ Apps Script) —
+// هذا هو السبب الحقيقي لبطء ظهور الصفحات المتبقي بعد إصلاحات الواجهة: كل صفحة تقريبًا تستدعي
+// listEmployees/getSettings، وكلاهما نادر التغيّر نسبيًا. نخزّنهما في CacheService (يبقى بين
+// التنفيذات، بعكس المتغيرات العادية) لمدة قصيرة، ونُبطِله فورًا عند أي كتابة على نفس الشيت.
+const CACHE_TTL_SECONDS = 60;
+const CACHEABLE_SHEETS = { Employees: true, Settings: true };
+
+function cacheKeyForSheet_(sheetName) { return "sheet_v1_" + sheetName; }
+
+function invalidateSheetCache_(sheetName) {
+  if (!CACHEABLE_SHEETS[sheetName]) return;
+  try { CacheService.getScriptCache().remove(cacheKeyForSheet_(sheetName)); } catch (e) { /* تجاهل فشل الكاش — لا يجب أن يوقف الكتابة الفعلية */ }
+}
+
 function readAll_(sheetName) {
+  const cacheable = !!CACHEABLE_SHEETS[sheetName];
+  if (cacheable) {
+    try {
+      const cached = CacheService.getScriptCache().get(cacheKeyForSheet_(sheetName));
+      if (cached) return JSON.parse(cached);
+    } catch (e) { /* تجاهل أي عطل بالكاش وأكملي بالقراءة الفعلية من الشيت */ }
+  }
   const sheet = getSheet_(sheetName);
   const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-  const headers = values[0];
-  return values.slice(1)
-    .filter((row) => row.some((c) => c !== ""))
-    .map((row) => rowToObject_(sheetName, headers, row));
+  let rows = [];
+  if (values.length >= 2) {
+    const headers = values[0];
+    rows = values.slice(1)
+      .filter((row) => row.some((c) => c !== ""))
+      .map((row) => rowToObject_(sheetName, headers, row));
+  }
+  if (cacheable) {
+    try { CacheService.getScriptCache().put(cacheKeyForSheet_(sheetName), JSON.stringify(rows), CACHE_TTL_SECONDS); }
+    catch (e) { /* قد تتجاوز البيانات حد حجم الكاش (100K) لو كبر الفريق كثيرًا جدًا — نتجاهل الكاش حينها بصمت */ }
+  }
+  return rows;
 }
 
 function upsertRow_(sheetName, obj, idField) {
@@ -133,11 +161,13 @@ function upsertRow_(sheetName, obj, idField) {
     if (values[r][idCol] === obj[idField]) {
       const rowArr = objectToRow_(sheetName, headers, obj);
       sheet.getRange(r + 1, 1, 1, headers.length).setValues([rowArr]);
+      invalidateSheetCache_(sheetName);
       return obj;
     }
   }
   const rowArr = objectToRow_(sheetName, headers, obj);
   sheet.appendRow(rowArr);
+  invalidateSheetCache_(sheetName);
   return obj;
 }
 
@@ -150,6 +180,7 @@ function deleteRow_(sheetName, id, idField) {
   for (let r = 1; r < values.length; r++) {
     if (values[r][idCol] === id) {
       sheet.deleteRow(r + 1);
+      invalidateSheetCache_(sheetName);
       return true;
     }
   }
