@@ -26,6 +26,13 @@ const Api = (() => {
     if (!json.ok) {
       throw new Error(json.error || "خطأ غير معروف من الخادم");
     }
+    // حماية عامة: أي إجراء "list*" يجب أن يُرجع مصفوفة دومًا. لو رجع أي شيء آخر (استجابة تالفة/جزئية من
+    // الخادم بسبب ضغط أو انقطاع مؤقت)، نُرجع مصفوفة فارغة بدل ما ننهار بخطأ "X.filter is not a function"
+    // في كل شاشة تستخدم هذا الإجراء — مع تنبيه بالـ console يساعد بالتشخيص لاحقًا.
+    if (action.indexOf("list") === 0 && !Array.isArray(json.data)) {
+      console.warn("Api.call: توقعت مصفوفة من " + action + " ووصل شيء آخر — تم التعويض بمصفوفة فارغة.", json.data);
+      return [];
+    }
     return json.data;
   }
 
