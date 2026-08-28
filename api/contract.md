@@ -12,7 +12,7 @@
 
 ```json
 {
-  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer | listDocuments | uploadDocument | deleteDocument | reviewDocument",
+  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | submitWorkLog | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | reopenEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer | listDocuments | uploadDocument | deleteDocument | reviewDocument",
   "auth": { "code": "XXXXXX" } ,
   "payload": { }
 }
@@ -41,6 +41,8 @@
 delivered, onTime, firstDraftAccepted (مهمَل — انظر ملاحظة أدناه), contentRevisionRounds, scopeRevisionRounds, collaborators[{employeeId,sharePercent}],
 isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative`
 
+- **إرسال أعمال الربع (`submitWorkLog`)**: الكاتب فقط، لنفسه، بعد وجود عمل واحد على الأقل مسجَّل لهذا الربع. يُنشئ/يحدّث صف `EvalScores` لنفس الربع ويضبط `workLogStatus: "submitted"` و`workLogSubmittedAt`. هذه علامة معلوماتية يراها المقيّم (في «فريقي» وأعلى شاشة التقييم) — **لا تقفل** سجل الأعمال: أي `upsertWork`/`deleteWork` لاحق لنفس الموظف/الربع يُلغي `workLogStatus` تلقائيًا (`resetWorkLogSubmissionIfNeeded_`)، فتحتاج الكاتبة إرسالها مرة أخرى.
+
 - **`firstDraftAccepted` (مهمَل، بند 2.1)**: كان خانة يُقرّرها من يسجّل العمل (تقول "قُبل من أول مسودة")، وتُحسب منها نسبة تلقائية تُستخدم كدرجة معيار "نسبة القبول من أول مسودة". أُلغي هذا الخيار من نموذج تسجيل/تعديل العمل ومن جدول العرض والتصدير — لم يعد أحد يُدخله لأعمال جديدة. المعيار نفسه (`first_draft_acceptance` ضمن ركيزة `client_satisfaction`) صار معيارًا عاديًا بدرجة يقدّرها المقيّم مباشرة (anchors 5/3/1) بدل احتسابه تلقائيًا من `firstDraftAccepted`. العمود يبقى في WorkLog لأسباب تاريخية فقط (صفوف قديمة) ولا يُقرأ من أي حساب جديد.
 
 - `workCategory`: أحد الأنواع الثابتة (انظر `WORK_CATEGORIES` في main.js) أو `"أخرى"` مع `customCategory` نصًا حرًا.
@@ -54,11 +56,14 @@ isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, soci
 
 ### EvalScores
 `id, employeeId, quarter, evaluatorId, status(draft|submitted|approved), pillarScores{pillarId:{criteriaScores:{critId:score}, comment}},
-selfAssessment{critId:score}, managerAudit{critId:score, note}, totalScore, classification, approvedBy, approvedAt, comments, createdAt, updatedAt,
-selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt`
+selfAssessment{critId:score}, managerAudit{critId:score, note} (محجوز — غير مفعّل، انظر ملاحظة أدناه), totalScore, classification, approvedBy, approvedAt, comments, createdAt, updatedAt,
+selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt, workLogStatus(null|submitted), workLogSubmittedAt`
 
-- **آلية التقييم الذاتي**: الكاتب يحفظ تقييمه الذاتي حفظًا قابلًا للتعديل عبر `upsertSelfAssessment` ما دام `selfAssessmentStatus != "submitted"`. الحدث الذي يُقفله نهائيًا هو فعل الكاتب نفسه: استدعاء `submitSelfAssessment` (زر "اعتماد تقييمي الذاتي" في الواجهة) — بعده يرفض الخادم أي `upsertSelfAssessment` لاحق لنفس الربع. قبل الاعتماد، لا يرى المقيّم قيم `selfAssessment` إطلاقًا (يعود فارغًا `{}` من `listEval`)؛ بعد الاعتماد يظهر كاملًا. هذا منفصل تمامًا عن `status`/`approveEval` (اعتماد المقيّم لتقييمه هو ككل).
-- في شاشة/تقرير التقييم النهائي (بعد `status === "approved"`)، لكل معيار سلوكي له `selfAssessment[critId]` تُعرَض قيمتا الكاتب الذاتية وقيمة المقيّم (`pillarScores[pillarId].criteriaScores[critId]`) جنبًا لجنب، لا رقمًا مدمجًا واحدًا.
+- **`managerAudit`**: عمود محجوز بالمخطط لتدقيق مستقل لكل معيار من مدير المقيّم، لكنه **غير مفعّل فعليًا** — يبقى `{}` دائمًا. التدقيق الفعلي الحالي ثنائي فقط عبر `approveEval`/`reopenEval` (موافقة/رفض بلا درجات مستقلة). قرار مقصود حاليًا؛ بناء الخاصية الكاملة يحتاج طلبًا صريحًا لاحقًا.
+- **آلية التقييم الذاتي**: الكاتب يحفظ تقييمه الذاتي حفظًا قابلًا للتعديل عبر `upsertSelfAssessment` ما دام `selfAssessmentStatus != "submitted"`. الحدث الذي يُقفله نهائيًا هو فعل الكاتب نفسه: استدعاء `submitSelfAssessment` (زر "اعتماد تقييمي الذاتي" في الواجهة) — بعده يرفض الخادم أي `upsertSelfAssessment` لاحق لنفس الربع. قبل الاعتماد، لا يرى المقيّم قيم `selfAssessment` إطلاقًا (يعود فارغًا `{}` من `listEval`)؛ بعد الاعتماد (`selfAssessmentStatus === "submitted"`، بمعزل عن اعتماد المقيّم لكامل التقييم) يظهر كاملًا. هذا منفصل تمامًا عن `status`/`approveEval` (اعتماد المقيّم لتقييمه هو ككل).
+- **إصلاح — رؤية الكاتب لتقييمها الذاتي هي نفسها**: `handleListEval_` كانت تُخفي صف الكاتب بالكامل عن نفسها ما دام `status !== "approved"` (بما فيها `selfAssessment`/`selfAssessmentStatus`/`workLogStatus` الخاصة بها هي)، فتظهر شاشتا «تقييمي الذاتي» و«سجل أعمالي» فارغتين وغير مقفلتين فور الإرسال رغم أن الحفظ نجح فعليًا (الخادم كان يرفض أي تعديل لاحق، لكن الواجهة تعرض حالة مضلِّلة). الإصلاح (`redactForOwnerWriterPending_`): قبل اعتماد المقيّم، الكاتب يرى دومًا حالة/قيم تقييمها الذاتي وحالة إرسال أعمالها هي (`workLogStatus`)، ويبقى محجوبًا فقط عن `pillarScores`/`totalScore`/`classification`/`comments` (درجات المقيّم) حتى الاعتماد — كما كان القصد أصلًا.
+- في شاشة/تقرير التقييم النهائي (بعد `status === "approved"`)، لكل معيار سلوكي له `selfAssessment[critId]` تُعرَض قيمتا الكاتب الذاتية وقيمة المقيّم (`pillarScores[pillarId].criteriaScores[critId]`) جنبًا لجنب، لا رقمًا مدمجًا واحدًا. أثناء التقييم نفسه (قبل الاعتماد)، شاشة التقييم (`renderEvalForm`) تعرض أيضًا شريط درجة الكاتب الذاتية أعلى كل معيار سلوكي فور إرسالها له، بمعزل عن اعتماد التقييم.
+- **اعتماد/إعادة فتح (`approveEval`/`reopenEval`)**: `reopenEval` يعكس `approveEval` تمامًا — يعيد تقييمًا `status: "approved"` إلى `"submitted"` (يمسح `approvedBy`/`approvedAt`، يُبقي كل الدرجات كما هي) بنفس نطاق صلاحية الاعتماد بالضبط. الواجهة تعطّل كل حقول الإدخال والأزرار (`حفظ كمسودة`/`إرسال للاعتماد`) فور `status === "approved"` وتُظهر بدلًا منها زر «إعادة فتح التقييم» فقط — قبل هذا الإصلاح كانت الحقول تبقى قابلة للتعديل والحفظ فوق تقييم معتمَد فعليًا رغم شارة تدّعي خلاف ذلك، ولم توجد أي آلية فتح إطلاقًا.
 
 ### Settings (صف واحد JSON)
 `pillars[], classification[], revisionValueMultiplier, topPerformerPublished` — قابل للتعديل بالكامل من شاشة الإعدادات (إدارة فقط).

@@ -223,7 +223,7 @@ function navItemsFor(session) {
     if (!isTopManager) items.push(["worklog", "سجل الأعمال"]);
     // مرحلة ٤ — أي مقيّم (لا فقط المدير) يعتمد مستندات تقاريره المباشرين (نفس صلاحية reviewDocument بالخادم).
     items.push(["team-documents", "مستندات الفريق"]);
-    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
+    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["behavioral", "سجل السلوك"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
     // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية.
     if (isTopManager) {
       items.push(["overview", "نظرة عامة"], ["employees", "الموظفون"], ["admin-worklog", "سجل أعمال الموظفين"],
@@ -232,7 +232,7 @@ function navItemsFor(session) {
     items.push(["export", "التصدير"]);
     return items;
   }
-  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]];
+  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["behavioral", "سجل السلوك"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]];
 }
 
 // شاشات "تفاصيل" صالحة لكن غير مدرَجة في القائمة الجانبية (يُفتَح عليها من زر داخل شاشة أخرى، لا من التنقّل المباشر)
@@ -282,6 +282,7 @@ function renderView() {
     dashboard: renderDashboardView,
     worklog: App.session.role === "evaluator" ? renderTeamWorkLogView : renderMyWorkLogView,
     "my-worklog": renderMyWorkLogView,
+    behavioral: renderMyBehavioralView,
     self: renderSelfAssessmentView,
     team: renderTeamView,
     review: renderReviewView,
@@ -335,18 +336,36 @@ async function renderAdminWorkLogView(el) {
   await renderWorkLogView(document.getElementById("adminWorkTableArea"), targetId, `سجل أعمال — ${target.name}`);
 }
 
-async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
+/** حالة إرسال أعمال الربع — بادج معلوماتية تراها الكاتبة (على سجلها) والمقيّم (على سجل تقاريره). */
+function workLogStatusBadgeHtml(evalRow) {
+  if (evalRow?.workLogStatus === "submitted") {
+    const d = evalRow.workLogSubmittedAt ? new Date(evalRow.workLogSubmittedAt).toLocaleDateString("ar") : "—";
+    return `<span class="badge badge-approved">📤 أُرسلت أعمال الربع للاعتماد — ${d}</span>`;
+  }
+  return `<span class="badge badge-draft">لم تُرسل أعمال الربع بعد</span>`;
+}
+
+async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
   const s = App.session;
   const empId = forEmployeeId || s.employee.id;
-  const rows = await Api.call("listWork", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } });
+  const [rows, evalRows] = await Promise.all([
+    Api.call("listWork", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } }),
+    Api.call("listEval", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } }),
+  ]);
+  const evalRow = evalRows[0] || null;
 
   const stats = computeWorkStats(rows);
+  const submitted = evalRow?.workLogStatus === "submitted";
 
   el.innerHTML = `
   <div class="flex-between">
     <h2>${readOnlyHeader || "سجل الأعمال"} <span class="small-muted">— ${App.quarter}</span></h2>
-    <button class="btn btn-primary" id="addWorkBtn">+ إضافة عمل</button>
+    <div class="gap-8">
+      ${isOwn ? `<button class="btn" id="submitWorkLogBtn">📤 ${submitted ? "أُرسلت — إرسال مرة أخرى" : "إرسال أعمال الربع للاعتماد"}</button>` : ""}
+      <button class="btn btn-primary" id="addWorkBtn">+ إضافة عمل</button>
+    </div>
   </div>
+  <p class="small-muted" style="margin-top:-6px">${workLogStatusBadgeHtml(evalRow)}${isOwn ? ` — إضافة/تعديل/حذف عمل لاحقًا يُلغي حالة الإرسال تلقائيًا` : ""}</p>
   <div class="stat-tiles">
     <div class="stat-tile"><div class="stat-num">${fmt1(stats.assignedCount)}</div><div class="stat-label">عدد الأعمال الموكلة${stats.revisionsCount ? " *" : ""}</div></div>
     <div class="stat-tile"><div class="stat-num">${stats.projectsCount}</div><div class="stat-label">عدد المشاريع</div></div>
@@ -383,22 +402,31 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader) {
     </tr>`;
   }
 
-  document.getElementById("addWorkBtn").onclick = () => openWorkModal(empId, null, () => renderWorkLogView(el, forEmployeeId, readOnlyHeader));
+  document.getElementById("addWorkBtn").onclick = () => openWorkModal(empId, null, () => renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn));
   el.querySelectorAll(".edit-w").forEach((b) => (b.onclick = () => {
     const row = rows.find((r) => r.id === b.dataset.id);
-    openWorkModal(empId, row, () => renderWorkLogView(el, forEmployeeId, readOnlyHeader));
+    openWorkModal(empId, row, () => renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn));
   }));
   el.querySelectorAll(".del-w").forEach((b) => (b.onclick = async () => {
     if (!confirm("تأكيد حذف هذا العمل نهائيًا؟")) return;
     try {
       await Api.call("deleteWork", { auth: authOf(s), payload: { id: b.dataset.id } });
       toast("تم الحذف");
-      renderWorkLogView(el, forEmployeeId, readOnlyHeader);
+      renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn);
     } catch (err) { toast(err.message); }
   }));
+  const submitWorkBtn = document.getElementById("submitWorkLogBtn");
+  if (submitWorkBtn) submitWorkBtn.onclick = async () => {
+    if (!confirm("تأكيد إرسال أعمال هذا الربع للاعتماد؟ سيظهر هذا لمقيّمك. يمكنك لاحقًا إضافة/تعديل عمل، لكن ذلك يُلغي حالة الإرسال وتحتاجين إرسالها مرة أخرى.")) return;
+    try {
+      await Api.call("submitWorkLog", { auth: authOf(s), payload: { quarter: App.quarter } });
+      toast("تم إرسال أعمال الربع للاعتماد");
+      renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn);
+    } catch (err) { toast(err.message); }
+  };
 }
 
-function renderMyWorkLogView(el) { return renderWorkLogView(el, App.session.employee.id, "سجل أعمالي"); }
+function renderMyWorkLogView(el) { return renderWorkLogView(el, App.session.employee.id, "سجل أعمالي", true); }
 
 /* =========================== مرحلة ٤ — مستندات الكاتب (توثيق داعم) =========================== */
 const DOCUMENT_TYPES = [
@@ -491,6 +519,97 @@ async function renderTeamDocumentsView(el) {
   const inner = document.getElementById("teamDocsInner");
   await renderDocumentsView(inner, currentId, esc(reports.find((r) => r.id === currentId)?.name || ""), true);
   document.getElementById("teamDocsSel").onchange = (e) => { App.teamDocsTargetId = e.target.value; renderTeamDocumentsView(el); };
+}
+
+/* =========================== سجل الوقائع السلوكية (BehavioralLog) =========================== */
+// سند فعلي لتقييم "التفاعل والمساهمة الجماعية" (عصف ذهني / مشاركة معرفة / مبادرة) — بدل الاعتماد
+// على ذاكرة المقيّم وقت التقييم فقط. نفس صلاحية سجل الأعمال بالضبط: الكاتب يسجّل لنفسه،
+// والمقيّم يسجّل لتقاريره المباشرين (ownedWorkIds_ على الخادم).
+const BEHAVIORAL_INDICATORS = [
+  { id: "brainstorming", label: "المشاركة في العصف الذهني" },
+  { id: "knowledge_sharing", label: "مشاركة الفوائد والمعرفة المهنية" },
+  { id: "initiative", label: "المبادرة" },
+];
+function behavioralIndicatorLabel(id) { return BEHAVIORAL_INDICATORS.find((i) => i.id === id)?.label || id; }
+
+function openBehavioralModal(employeeId, onSaved) {
+  const s = App.session;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+  <div class="modal">
+    <h3>إضافة واقعة سلوكية</h3>
+    <div class="field"><label>المؤشر</label><select id="f_bIndicator">
+      ${BEHAVIORAL_INDICATORS.map((i) => `<option value="${i.id}">${esc(i.label)}</option>`).join("")}
+    </select></div>
+    <div class="field"><label>التاريخ</label><input type="date" id="f_bDate" value="${new Date().toISOString().slice(0, 10)}"></div>
+    <div class="field"><label>الوصف</label><textarea id="f_bDesc" rows="3" placeholder="مثال: اقترح تحسينًا على مسار المراجعة ونُفِّذ فعليًا"></textarea></div>
+    <div class="flex-between">
+      <button class="btn btn-ghost" id="cancelModal">إلغاء</button>
+      <button class="btn btn-primary" id="saveModal">حفظ</button>
+    </div>
+  </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
+  backdrop.querySelector("#saveModal").onclick = async () => {
+    const description = document.getElementById("f_bDesc").value.trim();
+    if (!description) return toast("الوصف مطلوب");
+    const row = {
+      employeeId, quarter: App.quarter,
+      indicator: document.getElementById("f_bIndicator").value,
+      date: document.getElementById("f_bDate").value,
+      description,
+    };
+    try {
+      await Api.call("upsertBehavioral", { auth: authOf(s), payload: { row } });
+      toast("تم الحفظ");
+      backdrop.remove();
+      onSaved();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+/** قسم قابل للتضمين — داخل شاشة التقييم (للمقيّم) أو شاشة مستقلة (للكاتب على نفسه). */
+async function renderBehavioralSection(el, employeeId, canEdit) {
+  const s = App.session;
+  const rows = await Api.call("listBehavioral", { auth: authOf(s), payload: { employeeId, quarter: App.quarter } });
+  const counts = {};
+  BEHAVIORAL_INDICATORS.forEach((i) => { counts[i.id] = rows.filter((r) => r.indicator === i.id).length; });
+  el.innerHTML = `
+  <div class="card">
+    <div class="flex-between">
+      <h3>سجل الوقائع السلوكية <span class="small-muted">— ${App.quarter}</span></h3>
+      ${canEdit ? `<button class="btn btn-sm btn-primary" id="addBehavioralBtn">+ إضافة واقعة</button>` : ""}
+    </div>
+    <p class="small-muted">سند فعلي لتقييم «التفاعل والمساهمة الجماعية» أعلاه — بدل الاعتماد على الذاكرة وقت التقييم.</p>
+    <div class="chip-row">${BEHAVIORAL_INDICATORS.map((i) => `<span class="chip">${esc(i.label)} <b>${counts[i.id]}</b></span>`).join("")}</div>
+    ${rows.length ? `<div class="table-wrap" style="margin-top:10px"><table>
+      <thead><tr><th>المؤشر</th><th>الوصف</th><th>التاريخ</th><th>سجّلها</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+      <tbody>${rows.map((r) => `<tr data-id="${r.id}">
+        <td>${esc(behavioralIndicatorLabel(r.indicator))}</td>
+        <td>${esc(r.description)}</td>
+        <td>${esc(r.date || "—")}</td>
+        <td>${esc(r.loggedBy || "—")}</td>
+        ${canEdit ? `<td><button class="icon-btn text-danger del-b" data-id="${r.id}">حذف</button></td>` : ""}
+      </tr>`).join("")}</tbody>
+    </table></div>` : `<p class="small-muted">لا توجد وقائع مسجّلة لهذا الربع بعد.</p>`}
+  </div>`;
+  const addBtn = document.getElementById("addBehavioralBtn");
+  if (addBtn) addBtn.onclick = () => openBehavioralModal(employeeId, () => renderBehavioralSection(el, employeeId, canEdit));
+  el.querySelectorAll(".del-b").forEach((b) => (b.onclick = async () => {
+    if (!confirm("تأكيد حذف هذه الواقعة؟")) return;
+    try {
+      await Api.call("deleteBehavioral", { auth: authOf(s), payload: { id: b.dataset.id } });
+      toast("تم الحذف");
+      renderBehavioralSection(el, employeeId, canEdit);
+    } catch (err) { toast(err.message); }
+  }));
+}
+
+/** شاشة مستقلة للكاتب — يسجّل وقائعه السلوكية بنفسه أولًا بأول، بدل الاعتماد على تذكّر المقيّم لاحقًا. */
+async function renderMyBehavioralView(el) {
+  el.innerHTML = `<h2>سجل السلوك — ${App.quarter}</h2><div id="myBehavioralArea"></div>`;
+  await renderBehavioralSection(document.getElementById("myBehavioralArea"), App.session.employee.id, true);
 }
 
 function fileToBase64_(file) {
@@ -1053,7 +1172,7 @@ async function renderTeamView(el) {
     <h3>فريقي المباشر</h3>
     <div class="table-wrap">
     <table>
-      <thead><tr><th>الاسم</th><th>المستوى</th><th>التخصص</th><th>حالة تقييم الربع</th><th>الدرجة</th><th></th></tr></thead>
+      <thead><tr><th>الاسم</th><th>المستوى</th><th>التخصص</th><th>أعمال الربع</th><th>حالة تقييم الربع</th><th>الدرجة</th><th></th></tr></thead>
       <tbody>
         ${reports.map((r) => {
           const ev = evalRows.find((e) => e.employeeId === r.id);
@@ -1061,6 +1180,7 @@ async function renderTeamView(el) {
             <td>${esc(r.name)}</td>
             <td>${r.level === "senior" ? "كاتب أول" : "كاتب"}</td>
             <td>${specialtyLabel(r.specialty)}</td>
+            <td>${workLogStatusBadgeHtml(ev)}</td>
             <td>${statusBadge(ev?.status)}</td>
             <td>${fmt1(ev?.totalScore)}</td>
             <td class="gap-8">
@@ -1068,7 +1188,7 @@ async function renderTeamView(el) {
               <button class="btn btn-sm btn-ghost review-go" data-emp="${r.id}">عرض/تصدير</button>
             </td>
           </tr>`;
-        }).join("") || `<tr><td colspan="6" class="empty-state">لا يوجد أعضاء فريق مباشرين مسجّلين بعد</td></tr>`}
+        }).join("") || `<tr><td colspan="7" class="empty-state">لا يوجد أعضاء فريق مباشرين مسجّلين بعد</td></tr>`}
       </tbody>
     </table>
     </div>
@@ -1182,11 +1302,20 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   const input = existing?.pillarScores ? JSON.parse(JSON.stringify(existing.pillarScores)) : {};
   const selfAssessment = existing?.selfAssessment || {};
   const metrics = Calc.computeMetrics(workRows);
+  const locked = existing?.status === "approved"; // مُعتمَد — للتعديل يجب إعادة الفتح أولًا (زر أدناه)
 
   const qualityPillar = settings.pillars.find((p) => p.id === "quality");
   // لا عيّنة: يُقيَّم كل عمل مسجَّل هذا الربع بلا استثناء — تُحدَّث القائمة تلقائيًا مع أي عمل يُضاف لاحقًا
   input.quality = input.quality || { sampleWorkIds: [], perSample: {} };
   input.quality.sampleWorkIds = workRows.map((w) => w.id);
+
+  const otherPillars = settings.pillars.filter((p) => p.id !== "quality" && (p[weightKey] || 0) > 0);
+  const technicalPillars = otherPillars.filter((p) => p.category !== "behavioral");
+  const behavioralPillars = otherPillars.filter((p) => p.category === "behavioral");
+
+  const selfBadge = existing?.selfAssessmentStatus === "submitted"
+    ? `<span class="badge badge-approved">✔ الكاتب أرسل تقييمه الذاتي — ${existing.selfAssessmentSubmittedAt ? new Date(existing.selfAssessmentSubmittedAt).toLocaleDateString("ar") : "—"}</span>`
+    : `<span class="badge badge-draft">⏳ لم يُرسل الكاتب تقييمه الذاتي بعد لهذا الربع</span>`;
 
   el.innerHTML = `
   <div class="card">
@@ -1194,35 +1323,60 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
       <div><h3>${esc(employee.name)}</h3><p class="small-muted">${level === "senior" ? "كاتب أول" : "كاتب"} — ${specialtyLabel(employee.specialty)} — الحالة: ${statusBadge(existing?.status)}</p></div>
       <div id="liveTotal" style="text-align:end"><div class="total-score-num" style="font-size:32px">—</div></div>
     </div>
+    <div class="gap-8" style="margin-top:10px">${workLogStatusBadgeHtml(existing)}${selfBadge}</div>
   </div>
 
-  <div class="card">
-    <h3>١. ${esc(qualityPillar.name)} <span class="small-muted">(${qualityPillar[weightKey]}%)</span></h3>
-    <p class="small-muted">${workRows.length
-      ? `يُقيَّم كل عمل مسجَّل هذا الربع (${workRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.`
-      : `لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.`}</p>
-    <div id="sampleForms"></div>
+  <div class="dash-tabs" id="evalTabs">
+    <button class="dash-tab-btn active" data-tab="technical">الأداء الفني</button>
+    <button class="dash-tab-btn" data-tab="behavioral">المهارات والسلوك</button>
   </div>
 
-  ${settings.pillars.filter((p) => p.id !== "quality" && (p[weightKey] || 0) > 0).map((p) => pillarFormHtml(p, level, input, metrics, selfAssessment)).join("")}
+  <div class="dash-tab-panel active" data-panel="technical">
+    <div class="card">
+      <h3>١. ${esc(qualityPillar.name)} <span class="small-muted">(${qualityPillar[weightKey]}%)</span></h3>
+      <p class="small-muted">${workRows.length
+        ? `يُقيَّم كل عمل مسجَّل هذا الربع (${workRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.`
+        : `لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.`}</p>
+      <div id="sampleForms"></div>
+    </div>
+    ${technicalPillars.map((p) => pillarFormHtml(p, level, input, metrics, selfAssessment, locked)).join("")}
+  </div>
+
+  <div class="dash-tab-panel" data-panel="behavioral">
+    ${behavioralPillars.map((p) => pillarFormHtml(p, level, input, metrics, selfAssessment, locked)).join("")}
+    <div id="behavioralLogArea"><div class="empty-state"><span class="spinner"></span></div></div>
+  </div>
 
   <div class="card">
     <h3>ملاحظات المقيّم</h3>
-    <textarea id="evalComments" rows="3">${esc(existing?.comments || "")}</textarea>
+    <textarea id="evalComments" rows="3" ${locked ? "disabled" : ""}>${esc(existing?.comments || "")}</textarea>
   </div>
 
   <div class="flex-between">
     <div class="gap-8">
-      <button class="btn" id="saveDraft">حفظ كمسودة</button>
-      <button class="btn btn-amber" id="submitEval">إرسال للاعتماد</button>
+      ${locked ? "" : `<button class="btn" id="saveDraft">حفظ كمسودة</button>
+      <button class="btn btn-amber" id="submitEval">إرسال للاعتماد</button>`}
       ${existing?.status === "submitted" ? `<button class="btn btn-primary" id="approveEval">اعتماد التقييم</button>` : ""}
+      ${locked ? `<button class="btn btn-ghost" id="reopenEval">🔓 إعادة فتح التقييم للتعديل</button>` : ""}
     </div>
-    ${existing?.status === "approved" ? `<span class="badge badge-approved">مُعتمَد ✔ — لا يمكن التعديل إلا عبر إعادة الفتح من الإدارة</span>` : ""}
+    ${locked ? `<span class="badge badge-approved">مُعتمَد ✔ — يلزم إعادة الفتح للتعديل</span>` : ""}
   </div>`;
 
   renderSampleForms();
   attachSliderHandlers(el);
   recomputeLive();
+  renderBehavioralSection(document.getElementById("behavioralLogArea"), employee.id, true);
+  wireEvalTabs();
+
+  function wireEvalTabs() {
+    const tabsWrap = document.getElementById("evalTabs");
+    tabsWrap.querySelectorAll(".dash-tab-btn").forEach((btn) => {
+      btn.onclick = () => {
+        tabsWrap.querySelectorAll(".dash-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        el.querySelectorAll(".dash-tab-panel").forEach((p) => p.classList.toggle("active", p.dataset.panel === btn.dataset.tab));
+      };
+    });
+  }
 
   function renderSampleForms() {
     const box = el.querySelector("#sampleForms");
@@ -1232,22 +1386,12 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
       const w = workRows.find((x) => x.id === wid);
       input.quality.perSample[wid] = input.quality.perSample[wid] || {};
       return `<div class="divider"></div><b>${esc(w?.title || wid)}</b>` +
-        qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id])).join("");
+        qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked)).join("");
     }).join("");
     box.querySelectorAll('input[type="range"]').forEach((inp) => {
       inp.oninput = () => recomputeLive();
       inp.addEventListener("change", () => recomputeLive());
     });
-  }
-
-  function collectInput() {
-    // quality: read sliders back into perSample
-    const ids = input.quality.sampleWorkIds;
-    ids.forEach((wid, idx) => {
-      const group = el.querySelectorAll("#sampleForms .rubric-item");
-    });
-    // simpler: query by nested structure using data attributes with work id embedded
-    return input;
   }
 
   function recomputeLive() {
@@ -1312,8 +1456,10 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     } catch (err) { toast(err.message); }
   }
 
-  document.getElementById("saveDraft").onclick = () => persist("draft");
-  document.getElementById("submitEval").onclick = () => persist("submitted");
+  const saveDraftBtn = document.getElementById("saveDraft");
+  if (saveDraftBtn) saveDraftBtn.onclick = () => persist("draft");
+  const submitEvalBtn = document.getElementById("submitEval");
+  if (submitEvalBtn) submitEvalBtn.onclick = () => persist("submitted");
   const approveBtn = document.getElementById("approveEval");
   if (approveBtn) {
     approveBtn.onclick = async () => {
@@ -1324,9 +1470,20 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
       } catch (err) { toast(err.message); }
     };
   }
+  const reopenBtn = document.getElementById("reopenEval");
+  if (reopenBtn) {
+    reopenBtn.onclick = async () => {
+      if (!confirm("تأكيد إعادة فتح هذا التقييم؟ سيعود لحالة «مُرسَل للاعتماد» ويمكن تعديله واعتماده من جديد.")) return;
+      try {
+        await Api.call("reopenEval", { auth: authOf(App.session), payload: { id: existing.id } });
+        toast("تم إعادة فتح التقييم للتعديل");
+        renderEvaluateView(document.getElementById("mainArea"));
+      } catch (err) { toast(err.message); }
+    };
+  }
 }
 
-function pillarFormHtml(p, level, input, metrics, selfAssessment) {
+function pillarFormHtml(p, level, input, metrics, selfAssessment, disabled) {
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
   input[p.id] = input[p.id] || { criteriaScores: {} };
   const applicable = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
@@ -1340,14 +1497,16 @@ function pillarFormHtml(p, level, input, metrics, selfAssessment) {
         return `<div class="rubric-item">
           <div class="rubric-title"><span>${esc(c.name)}</span><span class="small-muted">محسوبة تلقائيًا من سجل الأعمال: ${val === null ? "لا بيانات" : fmt1(val) + c.unit}</span></div>
           <label class="small-muted">الدرجة (${fmt1(auto) || "—"} تلقائيًا — يمكن تعديلها يدويًا عند الحاجة)</label>
-          <input type="range" min="1" max="5" step="0.1" value="${current ?? auto ?? 3}" data-pillar="${p.id}" data-crit="${c.id}">
+          <input type="range" min="1" max="5" step="0.1" value="${current ?? auto ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" ${disabled ? "disabled" : ""}>
         </div>`;
       }
       const selfVal = selfAssessment[c.id];
+      const hasSelf = selfVal !== undefined && selfVal !== null;
       return `<div class="rubric-item">
-        <div class="rubric-title"><span>${esc(c.name)}${selfVal ? ` <span class="small-muted">— تقييم الكاتب الذاتي: ${selfVal}</span>` : ""}</span>
+        <div class="rubric-title"><span>${esc(c.name)}</span>
         <span class="score-pill" data-pill="${p.id}-${c.id}">${input[p.id].criteriaScores[c.id] ?? 3}</span></div>
-        <input type="range" min="1" max="5" step="0.5" value="${input[p.id].criteriaScores[c.id] ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" data-pillslider="${p.id}-${c.id}">
+        ${hasSelf ? `<div class="criterion-score-line" style="margin-bottom:6px"><span class="small-muted">تقييم الكاتب الذاتي</span>${scoreBarHtml(selfVal, true)}</div>` : ""}
+        <input type="range" min="1" max="5" step="0.5" value="${input[p.id].criteriaScores[c.id] ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" data-pillslider="${p.id}-${c.id}" ${disabled ? "disabled" : ""}>
         ${c.anchors ? `<div class="rubric-anchors">
           <span><b>1</b> — ${esc(c.anchors["1"] || "")}</span>
           <span style="text-align:center"><b>3</b> — ${esc(c.anchors["3"] || "")}</span>

@@ -216,6 +216,16 @@ def handle_list_work(db, actor, payload):
     return rows
 
 
+def _reset_work_log_submission_if_needed(db, employee_id, quarter):
+    """لو الكاتب سبق وأرسل أعمال هذا الربع، أي تغيير لاحق على سجل أعماله لنفس الربع يُلغي حالة
+    الإرسال تلقائيًا — يطابق resetWorkLogSubmissionIfNeeded_ في Code.gs."""
+    existing = next((r for r in db["evalScores"] if r["employeeId"] == employee_id and r["quarter"] == quarter), None)
+    if existing and existing.get("workLogStatus") == "submitted":
+        existing["workLogStatus"] = None
+        existing["workLogSubmittedAt"] = None
+        existing["updatedAt"] = now_iso()
+
+
 def handle_upsert_work(db, actor, payload):
     row = payload["row"]
     allowed = _owned_work_ids(db, actor)
@@ -227,14 +237,17 @@ def handle_upsert_work(db, actor, payload):
         existing.update(row)
         existing["updatedAt"] = now_iso()
         audit(db, "-", actor_name, "تعديل عمل", "WorkLog", existing["id"], existing.get("title"))
-        return existing
-    row["id"] = row.get("id") or str(uuid.uuid4())
-    row["createdBy"] = actor_name
-    row["createdAt"] = now_iso()
-    row["updatedAt"] = now_iso()
-    db["workLog"].append(row)
-    audit(db, "-", actor_name, "إضافة عمل", "WorkLog", row["id"], row.get("title"))
-    return row
+        saved = existing
+    else:
+        row["id"] = row.get("id") or str(uuid.uuid4())
+        row["createdBy"] = actor_name
+        row["createdAt"] = now_iso()
+        row["updatedAt"] = now_iso()
+        db["workLog"].append(row)
+        audit(db, "-", actor_name, "إضافة عمل", "WorkLog", row["id"], row.get("title"))
+        saved = row
+    _reset_work_log_submission_if_needed(db, saved["employeeId"], saved["quarter"])
+    return saved
 
 
 def handle_delete_work(db, actor, payload):
@@ -248,7 +261,35 @@ def handle_delete_work(db, actor, payload):
     db["workLog"] = [r for r in db["workLog"] if r["id"] != wid]
     actor_name = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
     audit(db, "-", actor_name, "حذف عمل", "WorkLog", wid, row.get("title"))
+    _reset_work_log_submission_if_needed(db, row["employeeId"], row["quarter"])
     return {"deleted": wid}
+
+
+def handle_submit_work_log(db, actor, payload):
+    if not actor["asWriter"]:
+        raise ApiError("فقط الكاتب يرسل أعمال الربع للاعتماد", 403)
+    me = actor["employee"]
+    quarter = payload.get("quarter")
+    if not quarter:
+        raise ApiError("الربع مطلوب", 400)
+    work_count = len([w for w in db["workLog"] if w["employeeId"] == me["id"] and w["quarter"] == quarter])
+    if not work_count:
+        raise ApiError("لا توجد أعمال مسجّلة لهذا الربع بعد — أضيفي عملًا واحدًا على الأقل أولًا", 400)
+    existing = next((r for r in db["evalScores"] if r["employeeId"] == me["id"] and r["quarter"] == quarter), None)
+    if not existing:
+        existing = {
+            "id": str(uuid.uuid4()), "employeeId": me["id"], "quarter": quarter,
+            "evaluatorId": me.get("managerId"), "status": "draft", "pillarScores": {},
+            "selfAssessment": {}, "managerAudit": {}, "totalScore": None, "classification": None,
+            "selfAssessmentStatus": "draft", "selfAssessmentSubmittedAt": None,
+            "createdAt": now_iso(),
+        }
+        db["evalScores"].append(existing)
+    existing["workLogStatus"] = "submitted"
+    existing["workLogSubmittedAt"] = now_iso()
+    existing["updatedAt"] = now_iso()
+    audit(db, "writer", me["name"], "إرسال أعمال الربع للاعتماد", "EvalScores", existing["id"], quarter)
+    return existing
 
 
 def handle_list_behavioral(db, actor, payload):
@@ -306,13 +347,37 @@ def _can_see_eval_detail(db, actor, row):
         return row.get("status") == "approved"
     if actor["asEvaluator"] and row.get("evaluatorId") == me["id"]:
         return True
-    # skip-level manager (approver) can see detail too
-    owner = next((e for e in db["employees"] if e["id"] == row["employeeId"]), None)
-    if owner and actor["asEvaluator"]:
-        evaluator = next((e for e in db["employees"] if e["id"] == row.get("evaluatorId")), None)
-        if evaluator and evaluator.get("managerId") == me["id"]:
-            return True
+    # skip-level manager (approver) can see detail too — أي مقيّم أعلى هرميًا من صاحب التقييم
+    if actor["asEvaluator"] and row.get("evaluatorId") in downline_ids(db, me["id"]):
+        return True
     return False
+
+
+def _with_self_assessment_visibility(actor, row):
+    """الكاتب يرى تقييمه الذاتي دائمًا؛ المقيّم لا يرى تفاصيله إلا بعد أن يعتمده الكاتب
+    (selfAssessmentStatus === "submitted") — يطابق withSelfAssessmentVisibility_ في Code.gs."""
+    me = actor.get("employee")
+    is_owner_writer = actor["asWriter"] and me and row["employeeId"] == me["id"]
+    if is_owner_writer:
+        return row
+    if row.get("selfAssessmentStatus") == "submitted":
+        return row
+    return {**row, "selfAssessment": {}}
+
+
+def _redact_for_owner_writer_pending(row):
+    """إصلاح: قبل اعتماد التقييم كاملًا، الكاتب يرى دومًا حالة/قيم تقييمه الذاتي هو نفسه — بمعزل عن
+    اعتماد المقيّم — ويبقى محجوبًا فقط عن درجات المقيّم/الإجمالي/التصنيف. يطابق redactForOwnerWriterPending_."""
+    return {
+        "id": row["id"], "employeeId": row["employeeId"], "quarter": row["quarter"],
+        "evaluatorId": row.get("evaluatorId"), "status": row.get("status"),
+        "selfAssessment": row.get("selfAssessment") or {},
+        "selfAssessmentStatus": row.get("selfAssessmentStatus") or "draft",
+        "selfAssessmentSubmittedAt": row.get("selfAssessmentSubmittedAt"),
+        # نفس المنطق: حالة إرسال أعمال الربع بيانات الكاتب نفسها أيضًا — تظهر لها دومًا بمعزل عن اعتماد التقييم.
+        "workLogStatus": row.get("workLogStatus"),
+        "workLogSubmittedAt": row.get("workLogSubmittedAt"),
+    }
 
 
 def _redact_eval(row):
@@ -346,9 +411,9 @@ def handle_list_eval(db, actor, payload):
         if not (is_owner_writer or is_owner_eval):
             continue
         if _can_see_eval_detail(db, actor, r):
-            visible.append(r)
+            visible.append(_with_self_assessment_visibility(actor, r))
         elif is_owner_writer:
-            pass  # not approved yet -> not visible at all to the writer
+            visible.append(_redact_for_owner_writer_pending(r))  # درجات المقيّم محجوبة، تقييمها الذاتي تراه دومًا
         else:
             visible.append(_redact_eval(r))
     return visible
@@ -385,17 +450,38 @@ def handle_upsert_self_assessment(db, actor, payload):
     quarter = payload["quarter"]
     self_scores = payload["selfAssessment"]
     existing = next((r for r in db["evalScores"] if r["employeeId"] == me["id"] and r["quarter"] == quarter), None)
+    if existing and existing.get("selfAssessmentStatus") == "submitted":
+        raise ApiError("تقييمك الذاتي مُعتمَد بالفعل ولا يمكن تعديله لهذا الربع", 403)
     if not existing:
         existing = {
             "id": str(uuid.uuid4()), "employeeId": me["id"], "quarter": quarter,
             "evaluatorId": me.get("managerId"), "status": "draft", "pillarScores": {},
             "selfAssessment": {}, "managerAudit": {}, "totalScore": None, "classification": None,
+            "selfAssessmentStatus": "draft", "selfAssessmentSubmittedAt": None,
             "createdAt": now_iso(),
         }
         db["evalScores"].append(existing)
     existing["selfAssessment"] = self_scores
     existing["updatedAt"] = now_iso()
     audit(db, "writer", me["name"], "تحديث التقييم الذاتي", "EvalScores", existing["id"], "")
+    return existing
+
+
+def handle_submit_self_assessment(db, actor, payload):
+    """يقفل التقييم الذاتي نهائيًا لهذا الربع — يطابق handleSubmitSelfAssessment_ في Code.gs."""
+    if not actor["asWriter"]:
+        raise ApiError("فقط الكاتب يعتمد تقييمه الذاتي", 403)
+    me = actor["employee"]
+    quarter = payload["quarter"]
+    existing = next((r for r in db["evalScores"] if r["employeeId"] == me["id"] and r["quarter"] == quarter), None)
+    if not existing or not existing.get("selfAssessment"):
+        raise ApiError("سجّلي تقييمك الذاتي أولًا قبل الاعتماد", 400)
+    if existing.get("selfAssessmentStatus") == "submitted":
+        raise ApiError("تقييمك الذاتي مُعتمَد بالفعل", 400)
+    existing["selfAssessmentStatus"] = "submitted"
+    existing["selfAssessmentSubmittedAt"] = now_iso()
+    existing["updatedAt"] = now_iso()
+    audit(db, "writer", me["name"], "اعتماد التقييم الذاتي", "EvalScores", existing["id"], "")
     return existing
 
 
@@ -429,6 +515,41 @@ def handle_approve_eval(db, actor, payload):
     row["approvedBy"] = actor_name
     row["approvedAt"] = now_iso()
     audit(db, "-", actor_name, "اعتماد تقييم", "EvalScores", eid, row.get("employeeId"))
+    return row
+
+
+def handle_reopen_eval(db, actor, payload):
+    """يعكس approveEval — نفس نطاق صلاحية الاعتماد بالضبط. يطابق handleReopenEval_ في Code.gs."""
+    eid = payload["id"]
+    row = next((r for r in db["evalScores"] if r["id"] == eid), None)
+    if not row:
+        raise ApiError("التقييم غير موجود", 404)
+    if row.get("status") != "approved":
+        raise ApiError("هذا التقييم غير مُعتمَد أصلًا — لا حاجة لإعادة فتحه", 400)
+    allowed = False
+    actor_name = ""
+    if actor["isAdmin"]:
+        allowed = True
+        actor_name = "الإدارة"
+    elif actor.get("isOrgAdmin"):
+        allowed = True
+        actor_name = actor["employee"]["name"]
+    elif actor["asEvaluator"]:
+        me = actor["employee"]
+        evaluator = next((e for e in db["employees"] if e["id"] == row.get("evaluatorId")), None)
+        if evaluator and evaluator.get("managerId") == me["id"]:
+            allowed = True
+            actor_name = me["name"]
+        elif row.get("evaluatorId") == me["id"] and me.get("canFinalApprove"):
+            allowed = True
+            actor_name = me["name"]
+    if not allowed:
+        raise ApiError("لا تملك صلاحية إعادة فتح هذا التقييم", 403)
+    row["status"] = "submitted"
+    row["approvedBy"] = None
+    row["approvedAt"] = None
+    row["updatedAt"] = now_iso()
+    audit(db, "-", actor_name, "إعادة فتح تقييم مُعتمَد", "EvalScores", eid, row.get("employeeId"))
     return row
 
 
@@ -676,6 +797,8 @@ def dispatch(action, auth, payload):
                 result = handle_upsert_work(db, actor, payload)
             elif action == "deleteWork":
                 result = handle_delete_work(db, actor, payload)
+            elif action == "submitWorkLog":
+                result = handle_submit_work_log(db, actor, payload)
             elif action == "listBehavioral":
                 result = handle_list_behavioral(db, actor, payload)
             elif action == "upsertBehavioral":
@@ -688,8 +811,12 @@ def dispatch(action, auth, payload):
                 result = handle_upsert_eval(db, actor, payload)
             elif action == "upsertSelfAssessment":
                 result = handle_upsert_self_assessment(db, actor, payload)
+            elif action == "submitSelfAssessment":
+                result = handle_submit_self_assessment(db, actor, payload)
             elif action == "approveEval":
                 result = handle_approve_eval(db, actor, payload)
+            elif action == "reopenEval":
+                result = handle_reopen_eval(db, actor, payload)
             elif action == "getSettings":
                 result = handle_get_settings(db, actor)
             elif action == "setSettings":

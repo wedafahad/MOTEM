@@ -29,7 +29,8 @@ const HEADERS = {
   EvalScores: ["id", "employeeId", "quarter", "evaluatorId", "status", "pillarScoresJSON",
     "selfAssessmentJSON", "managerAuditJSON", "totalScore", "classification", "approvedBy",
     "approvedAt", "comments", "createdAt", "updatedAt",
-    "selfAssessmentStatus", "selfAssessmentSubmittedAt"],
+    "selfAssessmentStatus", "selfAssessmentSubmittedAt",
+    "workLogStatus", "workLogSubmittedAt"],
   Settings: ["key", "value"],
   AuditLog: ["id", "timestamp", "actorRole", "actorName", "action", "targetType", "targetId", "details"],
   Documents: ["id", "employeeId", "docType", "fileName", "mimeType", "driveFileId", "driveUrl",
@@ -388,23 +389,40 @@ function handleListWork_(actor, payload) {
   return rows;
 }
 
+/** لو كان الكاتب سبق وأرسل أعمال هذا الربع للاعتماد (workLogStatus === "submitted")، أي إضافة/تعديل/حذف
+ * لاحق على سجل أعماله لنفس الربع يُلغي حالة الإرسال تلقائيًا — حتى لا يرى المقيّم علامة "أُرسلت" على
+ * قائمة تغيّرت فعليًا عن التي وافق عليها الكاتب. الكاتب يحتاج يرسل الأعمال مرة أخرى بعد أي تغيير. */
+function resetWorkLogSubmissionIfNeeded_(employeeId, quarter) {
+  const existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === employeeId && r.quarter === quarter);
+  if (existing && existing.workLogStatus === "submitted") {
+    existing.workLogStatus = null;
+    existing.workLogSubmittedAt = null;
+    existing.updatedAt = nowIso();
+    upsertRow_(SHEET_NAMES.EVAL, existing);
+  }
+}
+
 function handleUpsertWork_(actor, payload) {
   const row = payload.row;
   const allowed = ownedWorkIds_(actor);
   if (allowed && !allowed[row.employeeId]) throw new ApiError("لا تملك صلاحية تعديل أعمال هذا الموظف", 403);
   const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   const existing = row.id ? findOne_(SHEET_NAMES.WORKLOG, (r) => r.id === row.id) : null;
+  let saved;
   if (existing) {
     const merged = Object.assign({}, existing, row, { updatedAt: nowIso() });
     upsertRow_(SHEET_NAMES.WORKLOG, merged);
     audit_("-", actorName, "تعديل عمل", "WorkLog", merged.id, merged.title);
-    return merged;
+    saved = merged;
+  } else {
+    row.id = row.id || newId();
+    row.createdBy = actorName; row.createdAt = nowIso(); row.updatedAt = nowIso();
+    upsertRow_(SHEET_NAMES.WORKLOG, row);
+    audit_("-", actorName, "إضافة عمل", "WorkLog", row.id, row.title);
+    saved = row;
   }
-  row.id = row.id || newId();
-  row.createdBy = actorName; row.createdAt = nowIso(); row.updatedAt = nowIso();
-  upsertRow_(SHEET_NAMES.WORKLOG, row);
-  audit_("-", actorName, "إضافة عمل", "WorkLog", row.id, row.title);
-  return row;
+  resetWorkLogSubmissionIfNeeded_(saved.employeeId, saved.quarter);
+  return saved;
 }
 
 function handleDeleteWork_(actor, payload) {
@@ -415,7 +433,32 @@ function handleDeleteWork_(actor, payload) {
   deleteRow_(SHEET_NAMES.WORKLOG, payload.id);
   const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   audit_("-", actorName, "حذف عمل", "WorkLog", payload.id, row.title);
+  resetWorkLogSubmissionIfNeeded_(row.employeeId, row.quarter);
   return { deleted: payload.id };
+}
+
+/** الكاتب يُعلن أن سجل أعماله لهذا الربع مكتمل وجاهز للتقييم — علامة معلوماتية يراها المقيّم،
+ * لا تمنع الكاتب لاحقًا من إضافة/تعديل عمل (لكن ذلك يُلغي "الإرسال" تلقائيًا — انظر resetWorkLogSubmissionIfNeeded_). */
+function handleSubmitWorkLog_(actor, payload) {
+  if (!actor.asWriter) throw new ApiError("فقط الكاتب يرسل أعمال الربع للاعتماد", 403);
+  const me = actor.employee;
+  const quarter = payload.quarter;
+  if (!quarter) throw new ApiError("الربع مطلوب", 400);
+  const workCount = readAll_(SHEET_NAMES.WORKLOG).filter((w) => w.employeeId === me.id && w.quarter === quarter).length;
+  if (!workCount) throw new ApiError("لا توجد أعمال مسجّلة لهذا الربع بعد — أضيفي عملًا واحدًا على الأقل أولًا", 400);
+  let existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === me.id && r.quarter === quarter);
+  if (!existing) {
+    existing = { id: newId(), employeeId: me.id, quarter: quarter, evaluatorId: me.managerId,
+      status: "draft", pillarScores: {}, selfAssessment: {}, managerAudit: {},
+      selfAssessmentStatus: "draft", selfAssessmentSubmittedAt: null,
+      totalScore: null, classification: null, createdAt: nowIso() };
+  }
+  existing.workLogStatus = "submitted";
+  existing.workLogSubmittedAt = nowIso();
+  existing.updatedAt = nowIso();
+  upsertRow_(SHEET_NAMES.EVAL, existing);
+  audit_("writer", me.name, "إرسال أعمال الربع للاعتماد", "EvalScores", existing.id, quarter);
+  return existing;
 }
 
 function handleListBehavioral_(actor, payload) {
@@ -480,6 +523,24 @@ function withSelfAssessmentVisibility_(actor, row) {
   return { ...row, selfAssessment: {} };
 }
 
+/** إصلاح: قبل اعتماد المقيّم للتقييم كاملًا، كانت handleListEval_ تُخفي صف الكاتب عنه بالكامل —
+ * بما في ذلك تقييمه الذاتي هو نفسه (selfAssessment/selfAssessmentStatus) — فيرى شاشة «تقييمي الذاتي»
+ * فارغة وغير مقفلة بعد الاعتماد مباشرة، رغم أن البيانات محفوظة فعليًا (الخادم يرفض أي تعديل لاحق،
+ * لكن الواجهة تعرض حالة مضلِّلة). الكاتب يرى دومًا حالة/قيم تقييمه الذاتي هو بمعزل عن اعتماد التقييم
+ * كاملًا، ويبقى محجوبًا فقط عن درجات المقيّم/الإجمالي/التصنيف حتى الاعتماد — كما كان الحال أصلًا. */
+function redactForOwnerWriterPending_(row) {
+  return {
+    id: row.id, employeeId: row.employeeId, quarter: row.quarter, evaluatorId: row.evaluatorId,
+    status: row.status,
+    selfAssessment: row.selfAssessment || {},
+    selfAssessmentStatus: row.selfAssessmentStatus || "draft",
+    selfAssessmentSubmittedAt: row.selfAssessmentSubmittedAt || null,
+    // نفس المنطق: حالة إرسال أعمال الربع بيانات الكاتب نفسها أيضًا — تظهر لها دومًا بمعزل عن اعتماد التقييم.
+    workLogStatus: row.workLogStatus || null,
+    workLogSubmittedAt: row.workLogSubmittedAt || null,
+  };
+}
+
 function handleListEval_(actor, payload) {
   let rows = readAll_(SHEET_NAMES.EVAL);
   if (payload.quarter) rows = rows.filter((r) => r.quarter === payload.quarter);
@@ -495,7 +556,7 @@ function handleListEval_(actor, payload) {
     const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.indexOf(r.employeeId) !== -1);
     if (!isOwnerWriter && !isOwnerEval) return;
     if (canSeeEvalDetail_(actor, r)) visible.push(withSelfAssessmentVisibility_(actor, r));
-    else if (isOwnerWriter) { /* غير معتمد بعد -> لا يظهر إطلاقًا للكاتب */ }
+    else if (isOwnerWriter) visible.push(redactForOwnerWriterPending_(r)); // درجات المقيّم محجوبة، لكن تقييمها الذاتي هي تراه دومًا
     else visible.push(redactEval_(r));
   });
   return visible;
@@ -585,6 +646,34 @@ function handleApproveEval_(actor, payload) {
   row.status = "approved"; row.approvedBy = actorName; row.approvedAt = nowIso();
   upsertRow_(SHEET_NAMES.EVAL, row);
   audit_("-", actorName, "اعتماد تقييم", "EvalScores", payload.id, row.employeeId);
+  return row;
+}
+
+/** يعكس approveEval: يعيد تقييمًا مُعتمَدًا إلى حالة "submitted" ليتمكن المقيّم من تعديله واعتماده من جديد.
+ * نفس نطاق صلاحية الاعتماد بالضبط (من يملك اعتماد تقييم يملك إعادة فتحه). لا يمسّ أي درجة/بيانات أخرى. */
+function handleReopenEval_(actor, payload) {
+  const row = findOne_(SHEET_NAMES.EVAL, (r) => r.id === payload.id);
+  if (!row) throw new ApiError("التقييم غير موجود", 404);
+  if (row.status !== "approved") throw new ApiError("هذا التقييم غير مُعتمَد أصلًا — لا حاجة لإعادة فتحه", 400);
+  let allowed = false, actorName = "";
+  if (actor.isAdmin) {
+    allowed = true; actorName = "الإدارة";
+  } else if (actor.isOrgAdmin) {
+    allowed = true; actorName = actor.employee.name;
+  } else if (actor.asEvaluator) {
+    const evaluator = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === row.evaluatorId);
+    if (evaluator && evaluator.managerId === actor.employee.id) {
+      allowed = true; actorName = actor.employee.name;
+    } else if (row.evaluatorId === actor.employee.id && actor.employee.canFinalApprove) {
+      allowed = true; actorName = actor.employee.name;
+    }
+  }
+  if (!allowed) throw new ApiError("لا تملك صلاحية إعادة فتح هذا التقييم", 403);
+  row.status = "submitted";
+  row.approvedBy = null; row.approvedAt = null;
+  row.updatedAt = nowIso();
+  upsertRow_(SHEET_NAMES.EVAL, row);
+  audit_("-", actorName, "إعادة فتح تقييم مُعتمَد", "EvalScores", payload.id, row.employeeId);
   return row;
 }
 
@@ -824,6 +913,7 @@ function dispatch_(action, auth, payload) {
       case "listWork": data = handleListWork_(actor, payload); break;
       case "upsertWork": data = handleUpsertWork_(actor, payload); break;
       case "deleteWork": data = handleDeleteWork_(actor, payload); break;
+      case "submitWorkLog": data = handleSubmitWorkLog_(actor, payload); break;
       case "listBehavioral": data = handleListBehavioral_(actor, payload); break;
       case "upsertBehavioral": data = handleUpsertBehavioral_(actor, payload); break;
       case "deleteBehavioral": data = handleDeleteBehavioral_(actor, payload); break;
@@ -832,6 +922,7 @@ function dispatch_(action, auth, payload) {
       case "upsertSelfAssessment": data = handleUpsertSelfAssessment_(actor, payload); break;
       case "submitSelfAssessment": data = handleSubmitSelfAssessment_(actor, payload); break;
       case "approveEval": data = handleApproveEval_(actor, payload); break;
+      case "reopenEval": data = handleReopenEval_(actor, payload); break;
       case "getSettings": data = handleGetSettings_(); break;
       case "setSettings": data = handleSetSettings_(actor, payload); break;
       case "changeAdminPassword": data = handleChangeAdminPassword_(actor, payload); break;
