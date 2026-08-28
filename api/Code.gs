@@ -549,7 +549,7 @@ function handleSubmitSelfAssessment_(actor, payload) {
   const quarter = payload.quarter;
   const existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === me.id && r.quarter === quarter);
   if (!existing || !existing.selfAssessment || !Object.keys(existing.selfAssessment).length) {
-    throw new ApiError("سجّلي تقييمك الذاتي أولًا قبل الاعتماد", 400);
+    throw new ApiError("سجّل تقييمك الذاتي أولًا قبل الاعتماد", 400);
   }
   if (existing.selfAssessmentStatus === "submitted") {
     throw new ApiError("تقييمك الذاتي مُعتمَد بالفعل", 400);

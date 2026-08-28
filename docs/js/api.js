@@ -21,7 +21,7 @@ const Api = (() => {
     try {
       json = await res.json();
     } catch (err) {
-      throw new Error("رد الخادم غير صالح (ليس JSON) — تأكدي من رابط النشر الصحيح لـ Apps Script");
+      throw new Error("رد الخادم غير صالح (ليس JSON) — تأكد من رابط النشر الصحيح لـ Apps Script");
     }
     if (!json.ok) {
       throw new Error(json.error || "خطأ غير معروف من الخادم");

@@ -182,7 +182,7 @@ async function doLogin(tab) {
       Store.set({ role: "admin", password });
     } else {
       const code = document.getElementById("code").value.trim();
-      if (!code) return toast("أدخلي الكود");
+      if (!code) return toast("أدخل الكود");
       const data = await Api.call("login", { payload: { code } });
       const role = tab === "writer" ? "writer" : "evaluator";
       if (role === "writer" && !data.asWriter) return renderLogin("هذا الكود ليس كود كاتب — جرّبي تبويب مقيّم/مدير");
@@ -524,7 +524,7 @@ function openDocumentModal(employeeId, onSaved) {
   backdrop.querySelector("#saveModal").onclick = async () => {
     const fileInput = document.getElementById("f_docFile");
     const file = fileInput.files[0];
-    if (!file) return toast("اختاري ملفًا أولًا");
+    if (!file) return toast("اختر ملفًا أولًا");
     if (file.size > MAX_DOCUMENT_BYTES) return toast("حجم الملف يتجاوز 8MB");
     try {
       const dataBase64 = await fileToBase64_(file);
@@ -589,7 +589,7 @@ function openWorkModal(employeeId, existing, onSaved) {
       <label>حدّدي نوع العمل (أخرى)</label><input type="text" id="f_customCategory" value="${esc(existing?.workCategory === "أخرى" ? existing?.customCategory || "" : "")}">
     </div>
     <div class="field" id="f_socialSubTypeWrap" style="display:none">
-      <label>الأنواع الدقيقة المشمولة في هذا العمل (اختاري كل ما ينطبق)</label>
+      <label>الأنواع الدقيقة المشمولة في هذا العمل (اختر كل ما ينطبق)</label>
       <div class="checkbox-row-group">
         ${SOCIAL_SUB_TYPES.map((t) => `<label class="checkbox-row"><input type="checkbox" class="f_socialSubType" value="${esc(t)}" ${existing?.socialSubTypes?.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}
       </div>
@@ -688,10 +688,10 @@ function openWorkModal(employeeId, existing, onSaved) {
     };
     if (!row.title) return toast("العنوان مطلوب");
     if (!row.link) return toast("رابط العمل مطلوب");
-    if (row.workCategory === "أخرى" && !row.customCategory) return toast("حدّدي نوع العمل في خانة «أخرى»");
-    if (cat.hasSubType && !row.socialSubTypes.length) return toast("حدّدي نوعًا فرعيًا واحدًا على الأقل لمنشورات وسائل التواصل");
+    if (row.workCategory === "أخرى" && !row.customCategory) return toast("حدّد نوع العمل في خانة «أخرى»");
+    if (cat.hasSubType && !row.socialSubTypes.length) return toast("حدّد نوعًا فرعيًا واحدًا على الأقل لمنشورات وسائل التواصل");
     if (cat.hasSubType && !row.project) return toast("اسم المشروع إجباري لمنشورات وسائل التواصل — يجمع كل الأنواع تحت مشروع واحد");
-    if (row.isRevision && !row.revisionOfWorkId) return toast("اختاري العمل الأصلي الذي رُوجِع");
+    if (row.isRevision && !row.revisionOfWorkId) return toast("اختر العمل الأصلي الذي رُوجِع");
     try {
       await Api.call("upsertWork", { auth: authOf(s), payload: { row } });
       toast("تم الحفظ");
@@ -1114,7 +1114,7 @@ async function renderTeamView(el) {
 async function renderReviewView(el) {
   const s = App.session;
   const empId = App.reviewTargetId;
-  if (!empId) { el.innerHTML = `<div class="empty-state">اختاري تقييمًا من «فريقي» للمراجعة</div>`; return; }
+  if (!empId) { el.innerHTML = `<div class="empty-state">اختر تقييمًا من «فريقي» للمراجعة</div>`; return; }
   const [employees, evalRows, workRows] = await Promise.all([
     Api.call("listEmployees", { auth: authOf(s) }),
     Api.call("listEval", { auth: authOf(s), payload: { employeeId: empId, quarter: App.quarter } }),
@@ -1200,7 +1200,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     <h3>١. ${esc(qualityPillar.name)} <span class="small-muted">(${qualityPillar[weightKey]}%)</span></h3>
     <p class="small-muted">${workRows.length
       ? `يُقيَّم كل عمل مسجَّل هذا الربع (${workRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.`
-      : `لا توجد أعمال مسجّلة لهذا الربع — أضيفيها من «سجل الأعمال» أولًا.`}</p>
+      : `لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.`}</p>
     <div id="sampleForms"></div>
   </div>
 
@@ -1227,7 +1227,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   function renderSampleForms() {
     const box = el.querySelector("#sampleForms");
     const ids = input.quality.sampleWorkIds;
-    if (!ids.length) { box.innerHTML = `<p class="small-muted">اختاري عملًا واحدًا على الأقل من الأعلى.</p>`; return; }
+    if (!ids.length) { box.innerHTML = `<p class="small-muted">اختر عملًا واحدًا على الأقل من الأعلى.</p>`; return; }
     box.innerHTML = ids.map((wid) => {
       const w = workRows.find((x) => x.id === wid);
       input.quality.perSample[wid] = input.quality.perSample[wid] || {};
