@@ -466,10 +466,9 @@ function canSeeEvalDetail_(actor, row) {
   const me = actor.employee;
   if (actor.asWriter && row.employeeId === me.id) return row.status === "approved";
   if (actor.asEvaluator && row.evaluatorId === me.id) return true;
-  if (actor.asEvaluator) {
-    const evaluator = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === row.evaluatorId);
-    if (evaluator && evaluator.managerId === me.id) return true;
-  }
+  // أي مقيّم أعلى هرميًا من المقيّم صاحب التقييم (مو فقط مديره المباشر) يرى التفاصيل — يشمل التقييم
+  // الذاتي مقارنة بتقييم المقيّم لأي مستوى إداري أعلى (مدير المدير وهكذا)، لا مستوى واحد فقط.
+  if (actor.asEvaluator && downlineIds_(me.id).indexOf(row.evaluatorId) !== -1) return true;
   return false;
 }
 
