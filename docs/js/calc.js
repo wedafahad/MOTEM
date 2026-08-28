@@ -22,6 +22,7 @@ const Calc = (() => {
 
   /** يحسب مقاييس ركيزة "رضا العميل" و"الانضباط" من سجل الأعمال الفعلي لموظف/ربع معيّن. */
   function computeMetrics(workRows) {
+    workRows = Array.isArray(workRows) ? workRows : [];
     const delivered = workRows.filter((w) => w.delivered);
     const total = workRows.length;
     const avgContentRevisionRounds = delivered.length
@@ -36,6 +37,7 @@ const Calc = (() => {
 
   /** نسبة مزيج الإبداعي/الرسمي هذا الربع — يُستخدم لتحديد أوزان معايير الجودة لكاتب "عام". */
   function creativeMix(workRows) {
+    workRows = Array.isArray(workRows) ? workRows : [];
     const withValue = workRows.filter((w) => w.workType === "creative" || w.workType === "formal");
     if (!withValue.length) return 0.5; // لا بيانات كافية -> توزيع متساوٍ افتراضيًا
     const creative = withValue.filter((w) => w.workType === "creative").length;

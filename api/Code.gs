@@ -766,11 +766,22 @@ function handleUnpublishTopPerformer_(actor) {
 
 // ============================= التوزيع (Dispatch) =============================
 
+// إجراءات القراءة فقط لا تحتاج قفلاً عامًا — قفلها كان يجبر كل الطلبات (حتى المتزامنة من نفس الصفحة)
+// على الانتظار بالتتابع، وهو السبب الرئيسي لبطء التحميل. القفل الآن يُستخدم فقط عند الكتابة الفعلية.
+const READ_ONLY_ACTIONS_ = {
+  listEmployees: true, listWork: true, listBehavioral: true, listEval: true,
+  getSettings: true, listAudit: true, listDocuments: true,
+};
+
 function dispatch_(action, auth, payload) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  payload = payload || {};
+  const needsLock = action !== "login" && action !== "adminLogin" && !READ_ONLY_ACTIONS_[action];
+  let lock = null;
+  if (needsLock) {
+    lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+  }
   try {
-    payload = payload || {};
     if (action === "login") return { ok: true, data: handleLogin_(payload) };
     if (action === "adminLogin") return { ok: true, data: handleAdminLogin_(payload) };
 
@@ -808,7 +819,7 @@ function dispatch_(action, auth, payload) {
     if (err instanceof ApiError) return { ok: false, error: err.message };
     return { ok: false, error: "خطأ غير متوقع بالخادم: " + err.message };
   } finally {
-    lock.releaseLock();
+    if (lock) lock.releaseLock();
   }
 }
 
