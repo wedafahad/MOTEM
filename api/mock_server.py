@@ -564,12 +564,26 @@ def handle_get_settings(db, actor):
     return settings
 
 
+def validate_pillar_weights(pillars):
+    """إصلاح: مجموع أوزان الركائز لكل مستوى يجب أن يساوي 100% — calc.js يقسم الدرجة الكلية دائمًا
+    على 100 لا على مجموع الأوزان الفعلي، فأي اختلال هنا ينتج درجات كلية غير صحيحة رياضيًا بصمت."""
+    eps = 0.05
+    labels = {"weightWriter": "الكاتب", "weightSenior": "الكاتب الأول"}
+    for key, label in labels.items():
+        total = sum((p.get(key) or 0) for p in pillars)
+        if abs(total - 100) > eps:
+            raise ApiError(
+                f"رفض الحفظ: مجموع أوزان {label} = {round(total, 2)}% وليس 100% — صحّحي الأوزان قبل الحفظ", 400
+            )
+
+
 def handle_set_settings(db, actor, payload):
     if not actor.get("isOrgAdmin"):
         raise ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403)
     new_settings = payload.get("settings")
     if not new_settings or not isinstance(new_settings.get("pillars"), list) or not new_settings["pillars"]:
         raise ApiError("رفض الحفظ: الإعدادات المُرسَلة لا تحتوي ركائز تقييم صالحة (pillars فارغة أو مفقودة)", 400)
+    validate_pillar_weights(new_settings["pillars"])
     new_settings["adminPassword"] = db["settings"]["adminPassword"]
     db["settings"] = new_settings
     audit(db, "admin" if actor["isAdmin"] else "manager", "الإدارة" if actor["isAdmin"] else actor["employee"]["name"],

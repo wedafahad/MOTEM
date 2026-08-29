@@ -679,6 +679,24 @@ function handleReopenEval_(actor, payload) {
 
 function handleGetSettings_() { return getSettings_(); }
 
+/** إصلاح: مجموع أوزان الركائز لكل مستوى (كاتب / كاتب أول) يجب أن يساوي 100% تمامًا —
+ * الدرجة الكلية في calc.js تُقسَم دائمًا على 100 (لا على مجموع الأوزان الفعلي)، فأي اختلال هنا
+ * يُنتج درجات كلية غير صحيحة رياضيًا لكل الكتّاب بصمت، دون أي رسالة خطأ. كانت الواجهة تعرض
+ * تحذيرًا نصيًا فقط ("يجب أن يساوي 100%") دون منع الحفظ فعليًا — هذا يمنعه على مستوى الخادم أيضًا. */
+function validatePillarWeights_(pillars) {
+  const EPS = 0.05;
+  const LABELS = { weightWriter: "الكاتب", weightSenior: "الكاتب الأول" };
+  ["weightWriter", "weightSenior"].forEach((key) => {
+    const sum = pillars.reduce((s, p) => s + (Number(p[key]) || 0), 0);
+    if (Math.abs(sum - 100) > EPS) {
+      throw new ApiError(
+        "رفض الحفظ: مجموع أوزان " + LABELS[key] + " = " + (Math.round(sum * 100) / 100) + "% وليس 100% — صحّحي الأوزان قبل الحفظ",
+        400
+      );
+    }
+  });
+}
+
 function handleSetSettings_(actor, payload) {
   if (!actor.isOrgAdmin) throw new ApiError("فقط الإدارة العامة أو المدير يعدّلان الإعدادات", 403);
   const current = getSettings_();
@@ -686,6 +704,7 @@ function handleSetSettings_(actor, payload) {
   if (!next || !Array.isArray(next.pillars) || next.pillars.length === 0) {
     throw new ApiError("رفض الحفظ: الإعدادات المُرسَلة لا تحتوي ركائز تقييم صالحة (pillars فارغة أو مفقودة)", 400);
   }
+  validatePillarWeights_(next.pillars);
   next.adminPassword = current.adminPassword;
   setSettings_(next);
   audit_(actor.isAdmin ? "admin" : "manager", actor.isAdmin ? "الإدارة" : actor.employee.name, "تحديث إعدادات المعايير", "Settings", "-", "");

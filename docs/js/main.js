@@ -1258,6 +1258,25 @@ async function renderReviewView(el) {
     };
     el.appendChild(btn);
   }
+  // إصلاح: هذه هي الشاشة الوحيدة التي يصل منها فعليًا مدير المقيّم (إشراف غير مباشر) إلى تقييمات مرؤوسيه —
+  // شاشة "التقييم" المباشرة لا تُفتح إلا لتقاريره المباشرين هو. بدون هذا الزر هنا، صلاحية إعادة الفتح
+  // الموجودة أصلًا بالخادم (نفس شرط اعتماد handleApproveEval_/handleReopenEval_) لم تكن قابلة للوصول
+  // إطلاقًا من أي واجهة لمدير المقيّم بعد أن يعتمد التقييم.
+  if (row.status === "approved") {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-ghost";
+    btn.textContent = "🔓 إعادة فتح التقييم للتعديل";
+    btn.onclick = async () => {
+      if (!confirm("تأكيد إعادة فتح هذا التقييم؟ سيعود لحالة «مُرسَل للاعتماد» ويمكن للمقيّم تعديله واعتماده من جديد.")) return;
+      try {
+        await Api.call("reopenEval", { auth: authOf(s), payload: { id: row.id } });
+        toast("تم إعادة فتح التقييم للتعديل");
+        App.view = "team";
+        renderShell();
+      } catch (err) { toast(err.message); }
+    };
+    el.appendChild(btn);
+  }
 }
 
 function specialtyLabel(s) { return { creative: "إبداعي", formal: "مؤسسي/رسمي", general: "عام" }[s] || "عام"; }
@@ -1805,7 +1824,7 @@ async function renderSettingsView(el) {
           <option value="behavioral" ${p.category === "behavioral" ? "selected" : ""}>القسم السلوكي والمهاراتي</option>
         </select></div>
       </div>
-      <div class="small-muted">مجموع أوزان الكاتب حاليًا: <b id="sumWriter">${sumWeights("weightWriter")}%</b> — مجموع أوزان الكاتب الأول: <b id="sumSenior">${sumWeights("weightSenior")}%</b> (يجب أن يساوي 100%)</div>
+      <div class="small-muted">مجموع أوزان الكاتب حاليًا: <b class="${weightOffClass("weightWriter")}">${sumWeights("weightWriter")}%</b> — مجموع أوزان الكاتب الأول: <b class="${weightOffClass("weightSenior")}">${sumWeights("weightSenior")}%</b> (يجب أن يساوي 100% — الحفظ يُرفض إن لم يساوِ)</div>
       <div class="divider"></div>
       <b>المعايير</b>
       ${p.criteria.map((c, ci) => criterionEditorHtml(p, pi, c, ci)).join("")}
@@ -1815,6 +1834,8 @@ async function renderSettingsView(el) {
   };
 
   function sumWeights(key) { return settings.pillars.reduce((s2, p) => s2 + (Number(p[key]) || 0), 0); }
+  // إصلاح: تمييز بصري فوري حين يختل المجموع عن 100% — الحفظ فعليًا مرفوض في هذه الحالة (انظر saveSettings أدناه)
+  function weightOffClass(key) { return Math.abs(sumWeights(key) - 100) > 0.05 ? "text-danger" : ""; }
 
   function criterionEditorHtml(p, pi, c, ci) {
     const isRatio = c.type === "ratio";
@@ -1917,6 +1938,10 @@ async function renderSettingsView(el) {
 
   document.getElementById("saveSettings").onclick = async () => {
     settings.revisionValueMultiplier = Number(document.getElementById("revMult").value) || 0.5;
+    // إصلاح: منع الحفظ محليًا فورًا لو اختل مجموع الأوزان — بدل انتظار رفض الخادم (الذي يتحقق من هذا أيضًا كخط دفاع ثانٍ)
+    const sw = sumWeights("weightWriter"), ss = sumWeights("weightSenior");
+    if (Math.abs(sw - 100) > 0.05) return toast(`مجموع أوزان الكاتب ${sw}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
+    if (Math.abs(ss - 100) > 0.05) return toast(`مجموع أوزان الكاتب الأول ${ss}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
     try {
       const saved = await Api.call("setSettings", { auth: authOf(s), payload: { settings } });
       App.settings = saved;
