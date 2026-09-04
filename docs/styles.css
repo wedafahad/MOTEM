@@ -206,6 +206,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--amber); out
 input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 .score-pill { display: inline-block; min-width: 34px; text-align: center; background: var(--ink); color: var(--paper); border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 13px; }
 
+/* ===== سبب الدرجة (تسبيب) عند تقييم أقل من 3 ===== */
+.criterion-reason-box { margin-top: -4px; margin-bottom: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: rgba(200,60,60,0.06); border: 1px solid rgba(200,60,60,0.35); }
+.criterion-reason-box label { color: var(--ink-2); margin-bottom: 6px; }
+.criterion-reason-box textarea { margin-bottom: 0; }
+.criterion-reason-display { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: rgba(200,60,60,0.06); border: 1px solid rgba(200,60,60,0.25); font-size: 13px; }
+.criterion-reason-display b { color: var(--ink-2); }
+
 /* ===== Score bars (dashboard) ===== */
 .pillar-row { margin-bottom: 14px; }
 .pillar-row .pillar-label { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 5px; }

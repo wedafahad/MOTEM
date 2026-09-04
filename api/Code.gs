@@ -19,30 +19,32 @@ const SHEET_NAMES = {
 
 const HEADERS = {
   Employees: ["id", "name", "isWriter", "isEvaluator", "level", "specialty", "managerId",
-    "writerCode", "evaluatorCode", "active", "createdAt", "updatedAt", "canFinalApprove"],
+    "writerCode", "evaluatorCode", "active", "createdAt", "updatedAt", "canFinalApprove",
+    "evalScopeAll", "evalScopeIdsJSON"],
   WorkLog: ["id", "employeeId", "title", "workType", "quarter", "date", "project", "workCategory", "customCategory", "actionType",
     "isRevision", "revisionOfWorkId",
     "delivered", "onTime", "firstDraftAccepted", "contentRevisionRounds", "scopeRevisionRounds", "collaboratorsJSON",
     "link", "notes", "createdBy", "createdAt", "updatedAt",
     "socialSubType", "isCollaborative", "socialSubTypesJSON"],
-  BehavioralLog: ["id", "employeeId", "quarter", "indicator", "description", "date", "loggedBy", "createdAt"],
+  BehavioralLog: ["id", "employeeId", "quarter", "indicator", "customIndicator", "description", "date", "loggedBy", "createdAt"],
   EvalScores: ["id", "employeeId", "quarter", "evaluatorId", "status", "pillarScoresJSON",
     "selfAssessmentJSON", "managerAuditJSON", "totalScore", "classification", "approvedBy",
     "approvedAt", "comments", "createdAt", "updatedAt",
     "selfAssessmentStatus", "selfAssessmentSubmittedAt",
-    "workLogStatus", "workLogSubmittedAt"],
+    "workLogStatus", "workLogSubmittedAt", "managerComments"],
   Settings: ["key", "value"],
   AuditLog: ["id", "timestamp", "actorRole", "actorName", "action", "targetType", "targetId", "details"],
-  Documents: ["id", "employeeId", "docType", "fileName", "mimeType", "driveFileId", "driveUrl",
+  Documents: ["id", "employeeId", "docType", "customDocType", "fileName", "mimeType", "driveFileId", "driveUrl",
     "status", "reviewedBy", "reviewNote", "uploadedAt", "updatedAt"],
 };
 
 // مرحلة ٤ — توثيق الكاتب: أنواع المستندات الداعمة المرتبطة بمعايير تقييم فعلية (لا تدخل الحساب تلقائيًا).
-const DOCUMENT_TYPES = ["course", "initiative", "interaction"];
+const DOCUMENT_TYPES = ["course", "initiative", "interaction", "other"];
 
 const JSON_COLUMNS = {
   WorkLog: { collaboratorsJSON: "collaborators", socialSubTypesJSON: "socialSubTypes" },
   EvalScores: { pillarScoresJSON: "pillarScores", selfAssessmentJSON: "selfAssessment", managerAuditJSON: "managerAudit" },
+  Employees: { evalScopeIdsJSON: "evalScopeIds" },
 };
 
 function nowIso() {
@@ -89,8 +91,8 @@ function rowToObject_(sheetName, headers, rowValues) {
     let v = rowValues[i];
     if (jsonCols[h]) {
       const outKey = jsonCols[h];
-      try { obj[outKey] = v ? JSON.parse(v) : ((outKey === "collaborators" || outKey === "socialSubTypes") ? [] : {}); }
-      catch (e) { obj[outKey] = (outKey === "collaborators" || outKey === "socialSubTypes") ? [] : {}; }
+      try { obj[outKey] = v ? JSON.parse(v) : ((outKey === "collaborators" || outKey === "socialSubTypes" || outKey === "evalScopeIds") ? [] : {}); }
+      catch (e) { obj[outKey] = (outKey === "collaborators" || outKey === "socialSubTypes" || outKey === "evalScopeIds") ? [] : {}; }
       return;
     }
     if (v === "") v = null;
@@ -106,7 +108,7 @@ function objectToRow_(sheetName, headers, obj) {
   return headers.map((h) => {
     if (jsonCols[h]) {
       const inKey = jsonCols[h];
-      return JSON.stringify(obj[inKey] !== undefined ? obj[inKey] : ((inKey === "collaborators" || inKey === "socialSubTypes") ? [] : {}));
+      return JSON.stringify(obj[inKey] !== undefined ? obj[inKey] : ((inKey === "collaborators" || inKey === "socialSubTypes" || inKey === "evalScopeIds") ? [] : {}));
     }
     const v = obj[h];
     if (v === undefined || v === null) return "";
@@ -316,11 +318,17 @@ function handleAdminLogin_(payload) {
 
 function handleListEmployees_(actor) {
   let rows;
-  if (actor.isAdmin) {
+  if (actor.isAdmin || actor.isOrgAdmin) {
+    // isOrgAdmin (الإدارة العامة أو أي "مدير" بلا مدير فوقه — وقد يوجد أكثر من واحد) يدير شاشة
+    // «الموظفون» بالكامل، وهذا يستلزم رؤية كل الموظفين لا نطاقه الهرمي وحده (خصوصًا مع وجود أكثر من
+    // مقيّم أعلى مستقل في نفس الوقت — لكل منهما رؤية كاملة لهذه الشاشة التشغيلية تحديدًا).
     rows = readAll_(SHEET_NAMES.EMPLOYEES);
+  } else if (actor.asEvaluator && actor.employee.evalScopeAll) {
+    rows = readAll_(SHEET_NAMES.EMPLOYEES); // إشراف موسّع على الجميع
   } else if (actor.asEvaluator) {
     const downline = downlineIds_(actor.employee.id);
-    rows = readAll_(SHEET_NAMES.EMPLOYEES).filter((e) => e.id === actor.employee.id || downline.indexOf(e.id) !== -1);
+    const extra = actor.employee.evalScopeIds || [];
+    rows = readAll_(SHEET_NAMES.EMPLOYEES).filter((e) => e.id === actor.employee.id || downline.indexOf(e.id) !== -1 || extra.indexOf(e.id) !== -1);
   } else {
     rows = [actor.employee];
   }
@@ -362,21 +370,41 @@ function handleDeleteEmployee_(actor, payload) {
   return { deleted: payload.id };
 }
 
-/** نطاق الكتابة (upsert/delete) — التقارير المباشرة فقط. */
+/** إشراف موسّع (بند لاحق) — مقيّم يملك evalScopeAll يقيّم/يطّلع على كل الكتّاب بمعزل عن التسلسل
+ * الهرمي (مثال: "المدير الإبداعي" الذي لا مدير له ولا فريق مباشر تحته أصلًا)، أو evalScopeIds يضيف
+ * كتّابًا محدَّدين بعينهم فوق تقاريره المباشرين العاديين — دون أن يصبحوا جزءًا من التسلسل الهرمي نفسه. */
+function evaluatesEmployee_(actor, employeeId) {
+  if (!actor.asEvaluator) return false;
+  const me = actor.employee;
+  if (me.evalScopeAll) return true;
+  if ((me.evalScopeIds || []).indexOf(employeeId) !== -1) return true;
+  return directReports_(me.id).some((r) => r.id === employeeId);
+}
+
+/** نطاق الكتابة (upsert/delete) — التقارير المباشرة + أي نطاق إشراف موسّع صريح (evalScopeAll/evalScopeIds). */
 function ownedWorkIds_(actor) {
   if (actor.isAdmin) return null;
+  if (actor.asEvaluator && actor.employee.evalScopeAll) return null; // null = بلا قيد (كل الكتّاب)
   const ids = {};
   if (actor.asWriter) ids[actor.employee.id] = true;
-  if (actor.asEvaluator) directReports_(actor.employee.id).forEach((r) => { ids[r.id] = true; });
+  if (actor.asEvaluator) {
+    directReports_(actor.employee.id).forEach((r) => { ids[r.id] = true; });
+    (actor.employee.evalScopeIds || []).forEach((id) => { ids[id] = true; });
+  }
   return ids;
 }
 
-/** نطاق القراءة (list) — أوسع: يشمل كل التسلسل الهرمي تحت المقيّم (downline)، لتمكين المراجعة/الاعتماد على المستوى الثاني. */
+/** نطاق القراءة (list) — أوسع: يشمل كل التسلسل الهرمي تحت المقيّم (downline) + أي نطاق إشراف موسّع صريح،
+ * لتمكين المراجعة/الاعتماد على المستوى الثاني وتمكين إشراف "المدير الإبداعي" ونحوه بمعزل عن التسلسل. */
 function readableWorkIds_(actor) {
   if (actor.isAdmin) return null;
+  if (actor.asEvaluator && actor.employee.evalScopeAll) return null; // null = بلا قيد (كل الكتّاب)
   const ids = {};
   if (actor.asWriter) ids[actor.employee.id] = true;
-  if (actor.asEvaluator) downlineIds_(actor.employee.id).forEach((id) => { ids[id] = true; });
+  if (actor.asEvaluator) {
+    downlineIds_(actor.employee.id).forEach((id) => { ids[id] = true; });
+    (actor.employee.evalScopeIds || []).forEach((id) => { ids[id] = true; });
+  }
   return ids;
 }
 
@@ -394,11 +422,27 @@ function handleListWork_(actor, payload) {
  * قائمة تغيّرت فعليًا عن التي وافق عليها الكاتب. الكاتب يحتاج يرسل الأعمال مرة أخرى بعد أي تغيير. */
 function resetWorkLogSubmissionIfNeeded_(employeeId, quarter) {
   const existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === employeeId && r.quarter === quarter);
-  if (existing && existing.workLogStatus === "submitted") {
+  if (!existing) return;
+  let changed = false;
+  if (existing.workLogStatus === "submitted") {
     existing.workLogStatus = null;
     existing.workLogSubmittedAt = null;
+    changed = true;
+  }
+  // إصلاح: إضافة/تعديل/حذف عمل بعد أن أُرسل التقييم للاعتماد أو اعتُمد فعليًا كان يترك التقييم على حاله
+  // (مُرسَل/مُعتمَد) رغم أن سجل الأعمال الذي بُني عليه تغيّر فعليًا — فيظل الكاتب يرى درجة (ربما نهائية)
+  // لم تُحتسب على أساس القائمة الحالية. أي تغيير كهذا يُلغي إرسال الاعتماد والاعتماد نفسه تلقائيًا،
+  // ويعيد التقييم إلى "مسودة" ليعيد المقيّم تقييمه (وإرساله واعتماده) على القائمة الجديدة.
+  if (existing.status === "submitted" || existing.status === "approved") {
+    existing.status = "draft";
+    existing.approvedBy = null;
+    existing.approvedAt = null;
+    changed = true;
+  }
+  if (changed) {
     existing.updatedAt = nowIso();
     upsertRow_(SHEET_NAMES.EVAL, existing);
+    audit_("-", "-", "إلغاء إرسال/اعتماد التقييم تلقائيًا (تغيّر سجل الأعمال)", "EvalScores", existing.id, quarter);
   }
 }
 
@@ -512,6 +556,9 @@ function canSeeEvalDetail_(actor, row) {
   // أي مقيّم أعلى هرميًا من المقيّم صاحب التقييم (مو فقط مديره المباشر) يرى التفاصيل — يشمل التقييم
   // الذاتي مقارنة بتقييم المقيّم لأي مستوى إداري أعلى (مدير المدير وهكذا)، لا مستوى واحد فقط.
   if (actor.asEvaluator && downlineIds_(me.id).indexOf(row.evaluatorId) !== -1) return true;
+  // إشراف موسّع صريح (evalScopeAll/evalScopeIds) — بمعزل عن التسلسل الهرمي ومن دون اشتراط كون
+  // المُقيَّم نفسه هو المُقيِّم في هذا الصف تحديدًا (اطّلاع كامل على تقييمات كل من في النطاق).
+  if (evaluatesEmployee_(actor, row.employeeId)) return true;
   return false;
 }
 
@@ -553,7 +600,7 @@ function handleListEval_(actor, payload) {
   const visible = [];
   rows.forEach((r) => {
     const isOwnerWriter = actor.asWriter && r.employeeId === me.id;
-    const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.indexOf(r.employeeId) !== -1);
+    const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.indexOf(r.employeeId) !== -1 || evaluatesEmployee_(actor, r.employeeId));
     if (!isOwnerWriter && !isOwnerEval) return;
     if (canSeeEvalDetail_(actor, r)) visible.push(withSelfAssessmentVisibility_(actor, r));
     else if (isOwnerWriter) visible.push(redactForOwnerWriterPending_(r)); // درجات المقيّم محجوبة، لكن تقييمها الذاتي هي تراه دومًا
@@ -566,8 +613,7 @@ function handleUpsertEval_(actor, payload) {
   if (!actor.asEvaluator) throw new ApiError("فقط المقيّم يسجّل التقييم", 403);
   const row = payload.row;
   const me = actor.employee;
-  const reportIds = directReports_(me.id).map((d) => d.id);
-  if (reportIds.indexOf(row.employeeId) === -1) throw new ApiError("لا تقيّم إلا فريقك المباشر", 403);
+  if (!evaluatesEmployee_(actor, row.employeeId)) throw new ApiError("لا تقيّم إلا فريقك المباشر أو من ضمن نطاق إشرافك", 403);
   row.evaluatorId = me.id;
   const existing = findOne_(SHEET_NAMES.EVAL, (r) => r.employeeId === row.employeeId && r.quarter === row.quarter);
   if (existing) {
@@ -651,6 +697,22 @@ function handleApproveEval_(actor, payload) {
 
 /** يعكس approveEval: يعيد تقييمًا مُعتمَدًا إلى حالة "submitted" ليتمكن المقيّم من تعديله واعتماده من جديد.
  * نفس نطاق صلاحية الاعتماد بالضبط (من يملك اعتماد تقييم يملك إعادة فتحه). لا يمسّ أي درجة/بيانات أخرى. */
+/** يسمح لمن يرى تفاصيل التقييم (canSeeEvalDetail_) — تحديدًا المدير/مقيّم بنطاق موسّع يراجع تقييمًا
+ * ليس هو مقيّمه الأساسي (عبر شاشة "مراجعة")، أو مدير المقيّم في مراجعة إشراف غير مباشر — بإضافة
+ * "مقترحات" خاصة به هو (managerComments)، بمعزل عن مقترحات المقيّم الأساسي (comments)، دون حاجة
+ * لصلاحية upsertEval الكاملة (المقصورة على تقارير المقيّم المباشرين/نطاقه). */
+function handleUpsertReviewNote_(actor, payload) {
+  if (!actor.asEvaluator) throw new ApiError("فقط المقيّم/المدير يضيف مقترحات", 403);
+  const row = findOne_(SHEET_NAMES.EVAL, (r) => r.id === payload.id);
+  if (!row) throw new ApiError("التقييم غير موجود", 404);
+  if (!canSeeEvalDetail_(actor, row)) throw new ApiError("لا تملك صلاحية الاطّلاع على هذا التقييم", 403);
+  row.managerComments = (payload.managerComments || "").trim();
+  row.updatedAt = nowIso();
+  upsertRow_(SHEET_NAMES.EVAL, row);
+  audit_("-", actor.employee.name, "تحديث مقترحات إضافية على تقييم", "EvalScores", row.id, row.employeeId);
+  return row;
+}
+
 function handleReopenEval_(actor, payload) {
   const row = findOne_(SHEET_NAMES.EVAL, (r) => r.id === payload.id);
   if (!row) throw new ApiError("التقييم غير موجود", 404);
@@ -762,25 +824,34 @@ function handleListDocuments_(actor, payload) {
   }
   const allowedIds = {};
   if (actor.asWriter) allowedIds[actor.employee.id] = true;
-  if (actor.asEvaluator) directReports_(actor.employee.id).forEach((r) => { allowedIds[r.id] = true; });
+  if (actor.asEvaluator) {
+    if (actor.employee.evalScopeAll) {
+      readAll_(SHEET_NAMES.EMPLOYEES).forEach((e) => { allowedIds[e.id] = true; });
+    } else {
+      directReports_(actor.employee.id).forEach((r) => { allowedIds[r.id] = true; });
+      (actor.employee.evalScopeIds || []).forEach((id) => { allowedIds[id] = true; });
+    }
+  }
   if (targetEmployeeId && !allowedIds[targetEmployeeId]) throw new ApiError("لا تملكين صلاحية الاطّلاع على مستندات هذا الموظف", 403);
   rows = rows.filter((r) => allowedIds[r.employeeId]);
   return targetEmployeeId ? rows.filter((r) => r.employeeId === targetEmployeeId) : rows;
 }
 
-/** الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة. */
+/** الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة أو ضمن نطاق إشرافه الموسّع. */
 function handleUploadDocument_(actor, payload) {
   const employeeId = payload.employeeId;
   if (!employeeId) throw new ApiError("الموظف مطلوب", 400);
   const isSelf = actor.asWriter && actor.employee.id === employeeId;
-  const isDirectReport = actor.asEvaluator && directReports_(actor.employee.id).some((r) => r.id === employeeId);
+  const isDirectReport = evaluatesEmployee_(actor, employeeId);
   if (!actor.isAdmin && !isSelf && !isDirectReport) throw new ApiError("لا تملكين صلاحية الرفع لهذا الموظف", 403);
   if (DOCUMENT_TYPES.indexOf(payload.docType) === -1) throw new ApiError("نوع مستند غير صالح", 400);
+  if (payload.docType === "other" && !payload.customDocType) throw new ApiError("حدّدي نوع المستند في خانة «أخرى»", 400);
   if (!payload.dataBase64) throw new ApiError("الملف مطلوب", 400);
   const saved = saveDocumentFile_(payload.fileName, payload.mimeType, payload.dataBase64);
   const now = nowIso();
   const row = {
     id: newId(), employeeId: employeeId, docType: payload.docType,
+    customDocType: payload.docType === "other" ? (payload.customDocType || "") : "",
     fileName: payload.fileName || "مستند", mimeType: payload.mimeType || "",
     driveFileId: saved.driveFileId, driveUrl: saved.driveUrl,
     status: "pending", reviewedBy: "", reviewNote: "",
@@ -796,7 +867,7 @@ function handleDeleteDocument_(actor, payload) {
   const doc = findOne_(SHEET_NAMES.DOCUMENTS, (d) => d.id === payload.id);
   if (!doc) throw new ApiError("المستند غير موجود", 404);
   const isOwner = actor.asWriter && actor.employee.id === doc.employeeId;
-  const isDirectManager = actor.asEvaluator && directReports_(actor.employee.id).some((r) => r.id === doc.employeeId);
+  const isDirectManager = evaluatesEmployee_(actor, doc.employeeId);
   if (!actor.isAdmin && !isOwner && !isDirectManager) throw new ApiError("لا تملكين صلاحية حذف هذا المستند", 403);
   try { if (doc.driveFileId) DriveApp.getFileById(doc.driveFileId).setTrashed(true); } catch (e) { /* الملف محذوف مسبقًا من Drive */ }
   deleteRow_(SHEET_NAMES.DOCUMENTS, payload.id);
@@ -808,7 +879,7 @@ function handleReviewDocument_(actor, payload) {
   const doc = findOne_(SHEET_NAMES.DOCUMENTS, (d) => d.id === payload.id);
   if (!doc) throw new ApiError("المستند غير موجود", 404);
   const emp = findOne_(SHEET_NAMES.EMPLOYEES, (e) => e.id === doc.employeeId);
-  const isDirectManager = actor.asEvaluator && emp && emp.managerId === actor.employee.id;
+  const isDirectManager = evaluatesEmployee_(actor, doc.employeeId);
   if (!actor.isOrgAdmin && !isDirectManager) throw new ApiError("فقط المقيّم المباشر أو الإدارة/المدير يعتمدون المستندات", 403);
   if (["approved", "rejected"].indexOf(payload.status) === -1) throw new ApiError("حالة غير صالحة", 400);
   const merged = Object.assign({}, doc, {
@@ -850,8 +921,10 @@ function computeCategorySubtotal_(row, employee, settings, category) {
 function topPerformerWritersScope_(actor) {
   const all = readAll_(SHEET_NAMES.EMPLOYEES).filter((e) => e.isWriter);
   if (actor.isAdmin || actor.isOrgAdmin) return all;
+  if (actor.asEvaluator && actor.employee.evalScopeAll) return all; // إشراف موسّع على الجميع
   const downline = downlineIds_(actor.employee.id);
-  return all.filter((e) => downline.indexOf(e.id) !== -1 || e.id === actor.employee.id);
+  const extra = (actor.employee.evalScopeIds || []);
+  return all.filter((e) => downline.indexOf(e.id) !== -1 || extra.indexOf(e.id) !== -1 || e.id === actor.employee.id);
 }
 
 /** الإدارة العامة، المدير، وأي مقيّم يقررون النشر — كل ضمن نطاق فريقه (انظر topPerformerWritersScope_). */
@@ -942,6 +1015,7 @@ function dispatch_(action, auth, payload) {
       case "submitSelfAssessment": data = handleSubmitSelfAssessment_(actor, payload); break;
       case "approveEval": data = handleApproveEval_(actor, payload); break;
       case "reopenEval": data = handleReopenEval_(actor, payload); break;
+      case "upsertReviewNote": data = handleUpsertReviewNote_(actor, payload); break;
       case "getSettings": data = handleGetSettings_(); break;
       case "setSettings": data = handleSetSettings_(actor, payload); break;
       case "changeAdminPassword": data = handleChangeAdminPassword_(actor, payload); break;

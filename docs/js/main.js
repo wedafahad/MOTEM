@@ -220,13 +220,17 @@ function navItemsFor(session) {
     items.push(["team", "فريقي"], ["evaluate", "التقييم"]);
     // "سجل الأعمال" هنا يعرض فريقك المباشر فقط — للمدير (أعلى الهرم) هذا مُتضمَّن بالكامل أصلًا في
     // "سجل أعمال الموظفين" الأشمل بالأسفل (كل الكتّاب)، فيُستبعَد له تحديدًا تفاديًا للتكرار.
-    if (!isTopManager) items.push(["worklog", "سجل الأعمال"]);
+    // "سجل السلوك" هنا (بلا "ي") يعرض سجل وقائع فريقك المباشر كاملًا — يقابل "سجل الأعمال" أعلاه تمامًا.
+    // للمدير (أعلى الهرم) هذا مُتضمَّن بالكامل أصلًا في "سجل سلوك الموظفين" الأشمل أدناه (كل الكتّاب).
+    if (!isTopManager) items.push(["team-behavioral", "سجل السلوك"]);
     // مرحلة ٤ — أي مقيّم (لا فقط المدير) يعتمد مستندات تقاريره المباشرين (نفس صلاحية reviewDocument بالخادم).
     items.push(["team-documents", "مستندات الفريق"]);
     if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["behavioral", "سجل السلوك"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
-    // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية.
+    // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية —
+    // بما فيها سجل السلوك الكامل لكل الكتّاب (لا فريقه المباشر فقط)، تمامًا كسجل أعمال الموظفين.
     if (isTopManager) {
       items.push(["overview", "نظرة عامة"], ["employees", "الموظفون"], ["admin-worklog", "سجل أعمال الموظفين"],
+        ["admin-behavioral", "سجل سلوك الموظفين"],
         ["settings", "المعايير والأوزان"], ["audit", "سجل التعديلات"]);
     }
     items.push(["export", "التصدير"]);
@@ -283,6 +287,8 @@ function renderView() {
     worklog: App.session.role === "evaluator" ? renderTeamWorkLogView : renderMyWorkLogView,
     "my-worklog": renderMyWorkLogView,
     behavioral: renderMyBehavioralView,
+    "team-behavioral": renderTeamBehavioralView,
+    "admin-behavioral": renderAdminBehavioralView,
     self: renderSelfAssessmentView,
     team: renderTeamView,
     review: renderReviewView,
@@ -305,7 +311,7 @@ function renderView() {
 async function renderTeamWorkLogView(el) {
   const s = App.session;
   const employees = await Api.call("listEmployees", { auth: authOf(s) });
-  const reports = employees.filter((e) => e.id !== s.employee.id && e.managerId === s.employee.id);
+  const reports = myEvaluableWriters(s, employees);
   if (!reports.length) { el.innerHTML = `<div class="empty-state">لا يوجد أعضاء فريق مباشرين بعد</div>`; return; }
   const targetId = App.workTargetId && reports.find((r) => r.id === App.workTargetId) ? App.workTargetId : reports[0].id;
   App.workTargetId = targetId;
@@ -433,10 +439,14 @@ const DOCUMENT_TYPES = [
   { id: "course", label: "دورة" },
   { id: "initiative", label: "مبادرة" },
   { id: "interaction", label: "توثيق تفاعل" },
+  { id: "other", label: "أخرى" },
 ];
 const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024; // 8MB — يطابق الحد الأقصى على الخادم
 
-function docTypeLabel(id) { return DOCUMENT_TYPES.find((t) => t.id === id)?.label || id; }
+function docTypeLabel(id, customDocType) {
+  if (id === "other") return customDocType ? `أخرى — ${customDocType}` : "أخرى";
+  return DOCUMENT_TYPES.find((t) => t.id === id)?.label || id;
+}
 
 function docStatusBadge(status) {
   const map = {
@@ -462,7 +472,7 @@ async function renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview)
     <thead><tr><th>الملف</th><th>النوع</th><th>الحالة</th><th>تاريخ الرفع</th><th>ملاحظة المراجعة</th><th></th></tr></thead>
     <tbody>${rows.map((d) => `<tr>
       <td><a href="${d.driveUrl}" target="_blank" rel="noopener">${esc(d.fileName)}</a></td>
-      <td>${esc(docTypeLabel(d.docType))}</td>
+      <td>${esc(docTypeLabel(d.docType, d.customDocType))}</td>
       <td>${docStatusBadge(d.status)}</td>
       <td>${d.uploadedAt ? new Date(d.uploadedAt).toLocaleDateString("ar") : "—"}</td>
       <td>${esc(d.reviewNote || "—")}</td>
@@ -509,7 +519,7 @@ function renderMyDocumentsView(el) { return renderDocumentsView(el, App.session.
 async function renderTeamDocumentsView(el) {
   const s = App.session;
   const employees = await Api.call("listEmployees", { auth: authOf(s) });
-  const reports = employees.filter((e) => e.managerId === s.employee.id);
+  const reports = myEvaluableWriters(s, employees);
   if (!reports.length) { el.innerHTML = `<div class="empty-state">لا يوجد أعضاء فريق مباشرين مسجّلين بعد</div>`; return; }
   const currentId = App.teamDocsTargetId && reports.some((r) => r.id === App.teamDocsTargetId) ? App.teamDocsTargetId : reports[0].id;
   App.teamDocsTargetId = currentId;
@@ -529,8 +539,12 @@ const BEHAVIORAL_INDICATORS = [
   { id: "brainstorming", label: "المشاركة في العصف الذهني" },
   { id: "knowledge_sharing", label: "مشاركة الفوائد والمعرفة المهنية" },
   { id: "initiative", label: "المبادرة" },
+  { id: "other", label: "أخرى" },
 ];
-function behavioralIndicatorLabel(id) { return BEHAVIORAL_INDICATORS.find((i) => i.id === id)?.label || id; }
+function behavioralIndicatorLabel(id, customIndicator) {
+  if (id === "other") return customIndicator ? `أخرى — ${customIndicator}` : "أخرى";
+  return BEHAVIORAL_INDICATORS.find((i) => i.id === id)?.label || id;
+}
 
 function openBehavioralModal(employeeId, onSaved) {
   const s = App.session;
@@ -542,6 +556,7 @@ function openBehavioralModal(employeeId, onSaved) {
     <div class="field"><label>المؤشر</label><select id="f_bIndicator">
       ${BEHAVIORAL_INDICATORS.map((i) => `<option value="${i.id}">${esc(i.label)}</option>`).join("")}
     </select></div>
+    <div class="field" id="f_bCustomWrap" style="display:none"><label>حدّدي المؤشر</label><input type="text" id="f_bCustom" placeholder="اكتبي نوع الواقعة"></div>
     <div class="field"><label>التاريخ</label><input type="date" id="f_bDate" value="${new Date().toISOString().slice(0, 10)}"></div>
     <div class="field"><label>الوصف</label><textarea id="f_bDesc" rows="3" placeholder="مثال: اقترح تحسينًا على مسار المراجعة ونُفِّذ فعليًا"></textarea></div>
     <div class="flex-between">
@@ -550,13 +565,22 @@ function openBehavioralModal(employeeId, onSaved) {
     </div>
   </div>`;
   document.body.appendChild(backdrop);
+  const indicatorSelect = backdrop.querySelector("#f_bIndicator");
+  const customWrap = backdrop.querySelector("#f_bCustomWrap");
+  const toggleCustom = () => { customWrap.style.display = indicatorSelect.value === "other" ? "" : "none"; };
+  indicatorSelect.onchange = toggleCustom;
+  toggleCustom();
   backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
   backdrop.querySelector("#saveModal").onclick = async () => {
     const description = document.getElementById("f_bDesc").value.trim();
     if (!description) return toast("الوصف مطلوب");
+    const indicator = indicatorSelect.value;
+    const customIndicator = document.getElementById("f_bCustom").value.trim();
+    if (indicator === "other" && !customIndicator) return toast("حدّدي نوع المؤشر في خانة «أخرى»");
     const row = {
       employeeId, quarter: App.quarter,
-      indicator: document.getElementById("f_bIndicator").value,
+      indicator,
+      customIndicator: indicator === "other" ? customIndicator : "",
       date: document.getElementById("f_bDate").value,
       description,
     };
@@ -586,7 +610,7 @@ async function renderBehavioralSection(el, employeeId, canEdit) {
     ${rows.length ? `<div class="table-wrap" style="margin-top:10px"><table>
       <thead><tr><th>المؤشر</th><th>الوصف</th><th>التاريخ</th><th>سجّلها</th>${canEdit ? "<th></th>" : ""}</tr></thead>
       <tbody>${rows.map((r) => `<tr data-id="${r.id}">
-        <td>${esc(behavioralIndicatorLabel(r.indicator))}</td>
+        <td>${esc(behavioralIndicatorLabel(r.indicator, r.customIndicator))}</td>
         <td>${esc(r.description)}</td>
         <td>${esc(r.date || "—")}</td>
         <td>${esc(r.loggedBy || "—")}</td>
@@ -612,6 +636,42 @@ async function renderMyBehavioralView(el) {
   await renderBehavioralSection(document.getElementById("myBehavioralArea"), App.session.employee.id, true);
 }
 
+/** المقيّم (غير المدير الأعلى): سجل سلوك فريقه المباشر — بنفس بنية "سجل الأعمال" (اختيار عضو ثم عرض سجله). */
+async function renderTeamBehavioralView(el) {
+  const s = App.session;
+  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  const reports = myEvaluableWriters(s, employees);
+  if (!reports.length) { el.innerHTML = `<div class="empty-state">لا يوجد أعضاء فريق مباشرين بعد</div>`; return; }
+  const targetId = App.behavioralTargetId && reports.find((r) => r.id === App.behavioralTargetId) ? App.behavioralTargetId : reports[0].id;
+  App.behavioralTargetId = targetId;
+  const target = reports.find((r) => r.id === targetId);
+  el.innerHTML = `<div class="flex-between"><h2>سجل السلوك — ${App.quarter}</h2></div>
+  <div class="pill-select" id="behavioralTargetPicker" style="margin-bottom:16px">
+    ${reports.map((r) => `<button data-id="${r.id}" class="${r.id === targetId ? "active" : ""}">${esc(r.name)}</button>`).join("")}
+  </div><h3 class="small-muted">${esc(target.name)}</h3><div id="behavioralTableArea"></div>`;
+  el.querySelectorAll("#behavioralTargetPicker button").forEach((b) => (b.onclick = () => { App.behavioralTargetId = b.dataset.id; renderTeamBehavioralView(el); }));
+  await renderBehavioralSection(document.getElementById("behavioralTableArea"), targetId, true);
+}
+
+/** المدير (أعلى الهرم): اطّلاع على سجل سلوك كل الكتّاب — بنفس بنية "سجل أعمال الموظفين". */
+async function renderAdminBehavioralView(el) {
+  const s = App.session;
+  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  const writers = employees.filter((e) => e.isWriter);
+  if (!writers.length) { el.innerHTML = `<div class="empty-state">لا يوجد كتّاب مسجَّلون بعد</div>`; return; }
+  const targetId = App.adminBehavioralTargetId && writers.find((r) => r.id === App.adminBehavioralTargetId) ? App.adminBehavioralTargetId : writers[0].id;
+  App.adminBehavioralTargetId = targetId;
+  const target = writers.find((r) => r.id === targetId);
+  el.innerHTML = `
+  <h2>سجل سلوك الموظفين</h2>
+  <p class="small-muted">اطّلاع المدير على سجل السلوك الكامل لكل الكتّاب (لا فريقه المباشر فقط) — مستند لتقييم ركيزة التفاعل والمساهمة الجماعية.</p>
+  <div class="pill-select" id="adminBehavioralTargetPicker" style="margin-bottom:16px">
+    ${writers.map((r) => `<button data-id="${r.id}" class="${r.id === targetId ? "active" : ""}">${esc(r.name)}</button>`).join("")}
+  </div><h3 class="small-muted">${esc(target.name)}</h3><div id="adminBehavioralTableArea"></div>`;
+  el.querySelectorAll("#adminBehavioralTargetPicker button").forEach((b) => (b.onclick = () => { App.adminBehavioralTargetId = b.dataset.id; renderAdminBehavioralView(el); }));
+  await renderBehavioralSection(document.getElementById("adminBehavioralTableArea"), targetId, true);
+}
+
 function fileToBase64_(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -631,6 +691,7 @@ function openDocumentModal(employeeId, onSaved) {
     <div class="field"><label>النوع</label><select id="f_docType">
       ${DOCUMENT_TYPES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
     </select></div>
+    <div class="field" id="f_docCustomWrap" style="display:none"><label>حدّدي النوع</label><input type="text" id="f_docCustom" placeholder="اكتبي نوع المستند"></div>
     <div class="field"><label>الملف</label><input type="file" id="f_docFile"></div>
     <p class="small-muted">الحد الأقصى لحجم الملف 8MB.</p>
     <div class="flex-between">
@@ -639,16 +700,24 @@ function openDocumentModal(employeeId, onSaved) {
     </div>
   </div>`;
   document.body.appendChild(backdrop);
+  const docTypeSelect = backdrop.querySelector("#f_docType");
+  const docCustomWrap = backdrop.querySelector("#f_docCustomWrap");
+  const toggleDocCustom = () => { docCustomWrap.style.display = docTypeSelect.value === "other" ? "" : "none"; };
+  docTypeSelect.onchange = toggleDocCustom;
+  toggleDocCustom();
   backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
   backdrop.querySelector("#saveModal").onclick = async () => {
     const fileInput = document.getElementById("f_docFile");
     const file = fileInput.files[0];
     if (!file) return toast("اختر ملفًا أولًا");
     if (file.size > MAX_DOCUMENT_BYTES) return toast("حجم الملف يتجاوز 8MB");
+    const docType = docTypeSelect.value;
+    const customDocType = document.getElementById("f_docCustom").value.trim();
+    if (docType === "other" && !customDocType) return toast("حدّدي نوع المستند في خانة «أخرى»");
     try {
       const dataBase64 = await fileToBase64_(file);
       await Api.call("uploadDocument", { auth: authOf(s), payload: {
-        employeeId, docType: document.getElementById("f_docType").value,
+        employeeId, docType, customDocType: docType === "other" ? customDocType : "",
         fileName: file.name, mimeType: file.type, dataBase64,
       } });
       toast("تم الرفع");
@@ -888,7 +957,7 @@ async function renderSelfAssessmentView(el) {
   };
 }
 
-function rubricSliderHtml(crit, value, disabled) {
+function rubricSliderHtml(crit, value, disabled, reasonKey, reasonValue) {
   const v = value ?? 3;
   return `<div class="rubric-item">
     <div class="rubric-title"><span>${esc(crit.name)}</span><span class="score-pill" data-pill="${crit.id}">${v}</span></div>
@@ -898,6 +967,10 @@ function rubricSliderHtml(crit, value, disabled) {
       <span style="text-align:center"><b>3</b> — ${esc(crit.anchors?.["3"] || "")}</span>
       <span style="text-align:left"><b>5</b> — ${esc(crit.anchors?.["5"] || "")}</span>
     </div>
+    ${reasonKey ? `<div class="criterion-reason-box" ${Number(v) < 3 ? "" : 'style="display:none"'}>
+      <label class="small-muted">سبب الدرجة (إلزامي عند درجة أقل من 3) — يظهر لاحقًا للكاتب والمدير</label>
+      <textarea data-reason="${reasonKey}" rows="2" placeholder="اذكري سبب هذه الدرجة…" ${disabled ? "disabled" : ""}>${esc(reasonValue || "")}</textarea>
+    </div>` : ""}
   </div>`;
 }
 function attachSliderHandlers(scope) {
@@ -958,6 +1031,8 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
       <button class="dash-tab-btn" data-tab="behavioral">القسم السلوكي والمهاراتي</button>
     </div>
     <div class="dash-tab-panel active" data-panel="summary">
+      ${revealValues && row.comments ? `<div class="card"><h3>مقترحات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
+      ${revealValues && row.managerComments ? `<div class="card"><h3>مقترحات إضافية (المدير/الإدارة)</h3><p>${esc(row.managerComments)}</p></div>` : ""}
       ${workRows ? workSummaryHtml(workRows) : ""}
       ${pillarsOverviewChartHtml(technical, weightKey, row, revealValues, "نظرة عامة — القسم الفني")}
       ${pillarsOverviewChartHtml(behavioral, weightKey, row, revealValues, "نظرة عامة — القسم السلوكي والمهاراتي")}
@@ -973,7 +1048,6 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
         <h3>القسم السلوكي والمهاراتي</h3>
         ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
       </div>
-      ${revealValues && row.comments ? `<div class="card"><h3>ملاحظات المقيّم</h3><p>${esc(row.comments)}</p></div>` : ""}
     </div>
   </div>`;
   // تصدير PDF موجز: شرح الدرجات (١/٣/٥) يبقى مطويًا/مخفيًا في الطباعة، والألوان تُطبع كما هي على الشاشة — بند 3.2
@@ -1070,6 +1144,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level) {
         const hasScore = score !== null && score !== undefined;
         const selfScore = revealValues ? selfAssessment[c.id] : null;
         const hasSelfScore = selfScore !== null && selfScore !== undefined;
+        const reasonText = p.id !== "quality" ? pr?.criteriaReasons?.[c.id] : null;
         return `<div class="criterion-card">
           <div class="criterion-head">
             <span class="criterion-name">${esc(c.name)}</span>
@@ -1080,6 +1155,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level) {
             <div class="criterion-score-line"><span class="small-muted">تقييم المقيّم</span>${scoreBarHtml(hasScore ? score : null, revealValues)}</div>
           </div>
           ${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}
+          ${hasScore && Number(score) < 3 && reasonText ? `<div class="criterion-reason-display"><b>سبب الدرجة:</b> ${esc(reasonText)}</div>` : ""}
         </div>`;
       }).join("")}
     </div>
@@ -1122,13 +1198,23 @@ function clientDownlineIds(employees, rootId) {
   return ids;
 }
 
+/** الكتّاب الذين يقيّمهم/يشرف عليهم هذا المقيّم فعليًا: تقاريره المباشرون + أي نطاق إشراف موسّع صريح
+ * (evalScopeAll/evalScopeIds) — نسخة واجهة من evaluatesEmployee_ بالخادم؛ يمنح تقييمًا/اطّلاعًا كاملًا
+ * (أعمال/سلوك/مستندات/تقييمات) على من في النطاق بمعزل عن التسلسل الهرمي (مثال: مدير إبداعي بلا فريق مباشر). */
+function myEvaluableWriters(session, employees) {
+  const me = session.employee;
+  if (me.evalScopeAll) return employees.filter((e) => e.isWriter && e.id !== me.id);
+  const extra = new Set(me.evalScopeIds || []);
+  return employees.filter((e) => e.isWriter && e.id !== me.id && (e.managerId === me.id || extra.has(e.id)));
+}
+
 async function renderTeamView(el) {
   const s = App.session;
   const [employees, evalRows] = await Promise.all([
     Api.call("listEmployees", { auth: authOf(s) }),
     Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
   ]);
-  const reports = employees.filter((e) => e.id !== s.employee.id && e.managerId === s.employee.id);
+  const reports = myEvaluableWriters(s, employees);
   // كل من تحتك هرميًا بخلاف تقاريرك المباشرين (المستوى الثاني فأعمق) — للاطّلاع الكامل على الفريق وتقييماته
   const directIds = new Set(reports.map((r) => r.id));
   const extendedTeam = employees.filter((e) => e.isWriter && e.id !== s.employee.id && !directIds.has(e.id));
@@ -1140,7 +1226,8 @@ async function renderTeamView(el) {
 
   // "موظف الربع" — متاح الآن لأي مقيّم (لا فقط الإدارة/المدير)، بنطاق فريقه فعليًا (downline + نفسه إن
   // كان كاتبًا)، مطابقًا تمامًا لنطاق topPerformerWritersScope_ على الخادم — يظهر دائمًا في "فريقي".
-  const myWriterScope = employees.filter((e) => e.isWriter && (e.id === s.employee.id || myDownlineIds.has(e.id)));
+  const extraScopeIds = new Set(s.employee.evalScopeAll ? employees.map((e) => e.id) : (s.employee.evalScopeIds || []));
+  const myWriterScope = employees.filter((e) => e.isWriter && (e.id === s.employee.id || myDownlineIds.has(e.id) || extraScopeIds.has(e.id)));
   const topPerformersHtml = await topPerformerSectionHtml(s, myWriterScope);
 
   el.innerHTML = `
@@ -1244,6 +1331,22 @@ async function renderReviewView(el) {
   const row = evalRows[0];
   if (!row) { el.innerHTML = `<div class="empty-state">لا يوجد تقييم لعرضه</div>`; return; }
   renderStructuredDashboard(el, { employee, row, revealValues: true, title: `مراجعة تقييم — ${employee?.name || ""}`, workRows });
+  // مقترحات إضافية من المدير/المقيّم بالنطاق الموسّع (بمعزل عن مقترحات المقيّم الأساسي) — تظهر لاحقًا
+  // في لوحة الكاتب وصفحة PDF بجانب مقترحات المقيّم، بنفس مبدأها تمامًا لكن بحقل مستقل.
+  const noteCard = document.createElement("div");
+  noteCard.className = "card";
+  noteCard.innerHTML = `
+    <h3>مقترحاتك على هذا التقييم</h3>
+    <p class="small-muted" style="margin-top:-8px">إضافية بجانب مقترحات المقيّم الأساسي — تظهر بعد الحفظ للكاتب في لوحته وفي صفحة PDF.</p>
+    <textarea id="reviewerNote" rows="3">${esc(row.managerComments || "")}</textarea>
+    <button class="btn" id="saveReviewerNote">حفظ المقترحات</button>`;
+  el.appendChild(noteCard);
+  document.getElementById("saveReviewerNote").onclick = async () => {
+    try {
+      await Api.call("upsertReviewNote", { auth: authOf(s), payload: { id: row.id, managerComments: document.getElementById("reviewerNote").value.trim() } });
+      toast("تم حفظ مقترحاتك");
+    } catch (err) { toast(err.message); }
+  };
   if (row.status === "submitted") {
     const btn = document.createElement("button");
     btn.className = "btn btn-primary";
@@ -1290,7 +1393,7 @@ function statusBadge(st) {
 async function renderEvaluateView(el) {
   const s = App.session;
   const employees = await Api.call("listEmployees", { auth: authOf(s) });
-  const reports = employees.filter((e) => e.id !== s.employee.id && e.managerId === s.employee.id);
+  const reports = myEvaluableWriters(s, employees);
   if (!reports.length) { el.innerHTML = `<div class="empty-state">لا يوجد أعضاء فريق لتقييمهم</div>`; return; }
   const targetId = App.evalTargetId && reports.find((r) => r.id === App.evalTargetId) ? App.evalTargetId : reports[0].id;
   App.evalTargetId = targetId;
@@ -1345,6 +1448,12 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     <div class="gap-8" style="margin-top:10px">${workLogStatusBadgeHtml(existing)}${selfBadge}</div>
   </div>
 
+  <div class="card">
+    <h3>مقترحات المقيّم</h3>
+    <p class="small-muted" style="margin-top:-8px">تظهر بعد اعتماد التقييم للكاتبة والمدير، وفي صفحة التصدير.</p>
+    <textarea id="evalComments" rows="3" ${locked ? "disabled" : ""}>${esc(existing?.comments || "")}</textarea>
+  </div>
+
   <div class="dash-tabs" id="evalTabs">
     <button class="dash-tab-btn active" data-tab="technical">الأداء الفني</button>
     <button class="dash-tab-btn" data-tab="behavioral">المهارات والسلوك</button>
@@ -1364,11 +1473,6 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   <div class="dash-tab-panel" data-panel="behavioral">
     ${behavioralPillars.map((p) => pillarFormHtml(p, level, input, metrics, selfAssessment, locked)).join("")}
     <div id="behavioralLogArea"><div class="empty-state"><span class="spinner"></span></div></div>
-  </div>
-
-  <div class="card">
-    <h3>ملاحظات المقيّم</h3>
-    <textarea id="evalComments" rows="3" ${locked ? "disabled" : ""}>${esc(existing?.comments || "")}</textarea>
   </div>
 
   <div class="flex-between">
@@ -1405,7 +1509,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
       const w = workRows.find((x) => x.id === wid);
       input.quality.perSample[wid] = input.quality.perSample[wid] || {};
       return `<div class="divider"></div><b>${esc(w?.title || wid)}</b>` +
-        qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked)).join("");
+        qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
     }).join("");
     box.querySelectorAll('input[type="range"]').forEach((inp) => {
       inp.oninput = () => recomputeLive();
@@ -1424,6 +1528,11 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         if (block) {
           const slider = block.querySelector(`input[data-crit="${c.id}"]`);
           if (slider) input.quality.perSample[wid][c.id] = Number(slider.value);
+          const reasonInp = block.querySelector(`textarea[data-reason]`);
+          if (reasonInp) {
+            input.quality.perSample[wid].reasons = input.quality.perSample[wid].reasons || {};
+            input.quality.perSample[wid].reasons[c.id] = reasonInp.value.trim();
+          }
         }
         idx++;
       });
@@ -1437,6 +1546,11 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
           const val = inp.value;
           input[p.id].criteriaScores[c.id] = val === "" ? null : Number(val);
         }
+        const reasonInp = el.querySelector(`textarea[data-reason="${p.id}-${c.id}"]`);
+        if (reasonInp) {
+          input[p.id].criteriaReasons = input[p.id].criteriaReasons || {};
+          input[p.id].criteriaReasons[c.id] = reasonInp.value.trim();
+        }
       });
     });
     const full = Calc.computeFullEvaluation(settings, employee, input, workRows);
@@ -1448,8 +1562,40 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     return full;
   }
 
+  /** يجمع كل معيار (رئيسي أو عيّنة جودة) بدرجة أقل من 3 بلا سبب مكتوب — لمنع الإرسال قبل تعبئته (بند 2). */
+  function collectMissingReasons() {
+    const missing = [];
+    otherPillars.forEach((p) => {
+      const applicable = p.criteria.filter((c) => c.type !== "ratio" && (!c.appliesToLevel || c.appliesToLevel === level));
+      applicable.forEach((c) => {
+        const val = input[p.id]?.criteriaScores?.[c.id];
+        if (val === null || val === undefined) return;
+        if (Number(val) >= 3) return;
+        const reason = (input[p.id]?.criteriaReasons?.[c.id] || "").trim();
+        if (!reason) missing.push(`${p.name} — ${c.name}`);
+      });
+    });
+    input.quality.sampleWorkIds.forEach((wid) => {
+      qualityPillar.criteria.forEach((c) => {
+        const val = input.quality.perSample[wid]?.[c.id];
+        if (val === null || val === undefined) return;
+        if (Number(val) >= 3) return;
+        const reason = (input.quality.perSample[wid]?.reasons?.[c.id] || "").trim();
+        if (!reason) missing.push(`الجودة — ${c.name} (${esc(workRows.find((w) => w.id === wid)?.title || wid)})`);
+      });
+    });
+    return missing;
+  }
+
   async function persist(status) {
     recomputeLive();
+    if (status === "submitted") {
+      const missing = collectMissingReasons();
+      if (missing.length) {
+        toast(`أضيفي سبب الدرجة لكل معيار أقل من 3 قبل الإرسال: ${missing.slice(0, 3).join("، ")}${missing.length > 3 ? "…" : ""}`);
+        return;
+      }
+    }
     const full = Calc.computeFullEvaluation(settings, employee, input, workRows);
     // ندمج المدخلات الخام (القابلة لإعادة التحرير) مع النتائج المحسوبة (لعرضها في اللوحات دون إعادة حساب)
     const combined = {};
@@ -1521,15 +1667,21 @@ function pillarFormHtml(p, level, input, metrics, selfAssessment, disabled) {
       }
       const selfVal = selfAssessment[c.id];
       const hasSelf = selfVal !== undefined && selfVal !== null;
+      const curScore = input[p.id].criteriaScores[c.id] ?? 3;
+      const curReason = input[p.id].criteriaReasons?.[c.id] || "";
       return `<div class="rubric-item">
         <div class="rubric-title"><span>${esc(c.name)}</span>
-        <span class="score-pill" data-pill="${p.id}-${c.id}">${input[p.id].criteriaScores[c.id] ?? 3}</span></div>
+        <span class="score-pill" data-pill="${p.id}-${c.id}">${curScore}</span></div>
         ${hasSelf ? `<div class="criterion-score-line" style="margin-bottom:6px"><span class="small-muted">تقييم الكاتب الذاتي</span>${scoreBarHtml(selfVal, true)}</div>` : ""}
-        <input type="range" min="1" max="5" step="0.5" value="${input[p.id].criteriaScores[c.id] ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" data-pillslider="${p.id}-${c.id}" ${disabled ? "disabled" : ""}>
+        <input type="range" min="1" max="5" step="0.5" value="${curScore}" data-pillar="${p.id}" data-crit="${c.id}" data-pillslider="${p.id}-${c.id}" ${disabled ? "disabled" : ""}>
         ${c.anchors ? `<div class="rubric-anchors">
           <span><b>1</b> — ${esc(c.anchors["1"] || "")}</span>
           <span style="text-align:center"><b>3</b> — ${esc(c.anchors["3"] || "")}</span>
           <span style="text-align:left"><b>5</b> — ${esc(c.anchors["5"] || "")}</span></div>` : ""}
+        <div class="criterion-reason-box" ${Number(curScore) < 3 ? "" : 'style="display:none"'}>
+          <label class="small-muted">سبب الدرجة (إلزامي عند درجة أقل من 3) — يظهر لاحقًا للكاتب والمدير</label>
+          <textarea data-reason="${p.id}-${c.id}" rows="2" placeholder="اذكري سبب هذه الدرجة…" ${disabled ? "disabled" : ""}>${esc(curReason)}</textarea>
+        </div>
       </div>`;
     }).join("")}
   </div>`;
@@ -1540,6 +1692,14 @@ document.addEventListener("input", (e) => {
   if (e.target.matches('input[type="range"][data-pillslider]')) {
     const pill = document.querySelector(`[data-pill="${e.target.dataset.pillslider}"]`);
     if (pill) pill.textContent = e.target.value;
+  }
+});
+// أي شريحة تقييم (رئيسية أو تفصيلية لعيّنات الجودة) — يظهر/يختفي مربع سبب الدرجة أسفلها تلقائيًا عند العبور تحت/فوق 3
+document.addEventListener("input", (e) => {
+  if (e.target.matches('input[type="range"][data-crit]')) {
+    const wrap = e.target.closest(".rubric-item");
+    const box = wrap ? wrap.querySelector(".criterion-reason-box") : null;
+    if (box) box.style.display = Number(e.target.value) < 3 ? "" : "none";
   }
 });
 
@@ -1698,7 +1858,7 @@ async function renderEmployeesView(el) {
     <thead><tr><th>الاسم</th><th>الصفات</th><th>المستوى</th><th>التخصص</th><th>يُقيَّم من</th><th>الأكواد</th><th></th></tr></thead>
     <tbody>${employees.map((e) => `<tr>
       <td>${esc(e.name)}</td>
-      <td>${e.isWriter ? '<span class="badge badge-general">كاتب</span>' : ""} ${e.isEvaluator ? '<span class="badge badge-formal">مقيّم</span>' : ""}</td>
+      <td>${e.isWriter ? '<span class="badge badge-general">كاتب</span>' : ""} ${e.isEvaluator ? '<span class="badge badge-formal">مقيّم</span>' : ""} ${e.isEvaluator && e.evalScopeAll ? '<span class="badge badge-approved" title="يقيّم/يطّلع على كل الكتّاب">كل الكتّاب</span>' : ""} ${e.isEvaluator && !e.evalScopeAll && (e.evalScopeIds || []).length ? `<span class="badge badge-pending" title="نطاق إضافي فوق فريقه المباشر">+${e.evalScopeIds.length}</span>` : ""}</td>
       <td>${e.level === "senior" ? "أول" : e.level === "writer" ? "كاتب" : "—"}</td>
       <td>${e.specialty ? specialtyLabel(e.specialty) : "—"}</td>
       <td>${esc(employees.find((m) => m.id === e.managerId)?.name || "—")}</td>
@@ -1727,6 +1887,11 @@ function genCode(prefix) {
 function openEmployeeModal(existing, employees, onSaved) {
   const s = App.session;
   const evaluators = employees.filter((e) => e.isEvaluator);
+  const allWriters = employees.filter((e) => e.isWriter && e.id !== existing?.id);
+  const existingScopeIds = existing?.evalScopeIds || [];
+  // نطاق التقييم/الإشراف: هرمي فقط (الافتراضي — فريقه المباشر وتسلسله) | كتّاب إضافيون محدَّدون فوق ذلك
+  // | كل الكتّاب بمعزل عن التسلسل (مثال: "المدير الإبداعي" الذي لا فريق مباشر تحته أصلًا).
+  const initialScopeMode = existing?.evalScopeAll ? "all" : existingScopeIds.length ? "custom" : "hierarchy";
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
@@ -1749,9 +1914,23 @@ function openEmployeeModal(existing, employees, onSaved) {
         <option value="general" ${!existing || existing?.specialty === "general" ? "selected" : ""}>عام (أوزان ديناميكية)</option></select></div>
     </div>
     <div class="field"><label>يُقيَّم من (المدير المباشر)</label><select id="f_mgr">
-      <option value="">— بدون —</option>
+      <option value="">— بدون — (لا أحد يقيّمه، مثل المدير/مدير إداري آخر بلا مدير فوقه)</option>
       ${evaluators.filter((ev) => ev.id !== existing?.id).map((ev) => `<option value="${ev.id}" ${existing?.managerId === ev.id ? "selected" : ""}>${esc(ev.name)}</option>`).join("")}
     </select></div>
+    <div id="f_scopeWrap" style="display:${existing?.isEvaluator ? "block" : "none"}">
+      <div class="field"><label>نطاق تقييمه/إشرافه</label><select id="f_scopeMode">
+        <option value="hierarchy" ${initialScopeMode === "hierarchy" ? "selected" : ""}>التسلسل الهرمي فقط (فريقه المباشر ومن تحتهم)</option>
+        <option value="custom" ${initialScopeMode === "custom" ? "selected" : ""}>+ كتّاب إضافيون محدَّدون (فوق تسلسله الهرمي إن وُجد)</option>
+        <option value="all" ${initialScopeMode === "all" ? "selected" : ""}>كل الكتّاب — بمعزل عن التسلسل الهرمي (مثال: مدير إبداعي)</option>
+      </select></div>
+      <div class="field" id="f_scopeCustomWrap" style="display:${initialScopeMode === "custom" ? "block" : "none"}">
+        <label>الكتّاب الإضافيون</label>
+        <div class="checkbox-row-group">
+          ${allWriters.map((w) => `<div class="checkbox-row"><input type="checkbox" class="f_scopeWriter" value="${w.id}" ${existingScopeIds.indexOf(w.id) !== -1 ? "checked" : ""}><label>${esc(w.name)}</label></div>`).join("") || `<p class="small-muted">لا يوجد كتّاب آخرون بعد</p>`}
+        </div>
+      </div>
+      <p class="small-muted" style="margin-top:-6px">هذا النطاق إضافي فوق فريقه المباشر إن وُجد — يمنحه تقييم/اطّلاع كامل (أعمال، سلوك، مستندات، تقييمات) على من في النطاق بمعزل عن التسلسل الهرمي.</p>
+    </div>
     <div class="flex-between">
       <button class="btn btn-ghost" id="cancelModal">إلغاء</button>
       <button class="btn btn-primary" id="saveModal">حفظ</button>
@@ -1761,10 +1940,15 @@ function openEmployeeModal(existing, employees, onSaved) {
   backdrop.querySelector("#cancelModal").onclick = () => backdrop.remove();
   document.getElementById("f_ise").onchange = (e) => {
     document.getElementById("f_cfaWrap").style.display = e.target.checked ? "flex" : "none";
+    document.getElementById("f_scopeWrap").style.display = e.target.checked ? "block" : "none";
+  };
+  document.getElementById("f_scopeMode").onchange = (e) => {
+    document.getElementById("f_scopeCustomWrap").style.display = e.target.value === "custom" ? "block" : "none";
   };
   backdrop.querySelector("#saveModal").onclick = async () => {
     const isWriter = document.getElementById("f_isw").checked;
     const isEvaluator = document.getElementById("f_ise").checked;
+    const scopeMode = isEvaluator ? document.getElementById("f_scopeMode").value : "hierarchy";
     const row = {
       id: existing?.id,
       name: document.getElementById("f_name").value.trim(),
@@ -1773,6 +1957,10 @@ function openEmployeeModal(existing, employees, onSaved) {
       level: isWriter ? document.getElementById("f_level").value : null,
       specialty: isWriter ? document.getElementById("f_spec").value : null,
       managerId: document.getElementById("f_mgr").value || null,
+      evalScopeAll: scopeMode === "all",
+      evalScopeIds: scopeMode === "custom"
+        ? Array.from(backdrop.querySelectorAll(".f_scopeWriter:checked")).map((i) => i.value)
+        : [],
       writerCode: existing?.writerCode || (isWriter ? genCode("W") : null),
       evaluatorCode: existing?.evaluatorCode || (isEvaluator ? genCode("EV") : null),
       active: true,
@@ -2028,12 +2216,12 @@ async function exportExcel(quarter) {
   const workByEmployee = {};
   workRows.forEach((w) => { (workByEmployee[w.employeeId] || (workByEmployee[w.employeeId] = [])).push(w); });
 
-  const summaryRows = [["الاسم", "المستوى", "التخصص", "الحالة", "الدرجة", "التصنيف"]];
+  const summaryRows = [["الاسم", "المستوى", "التخصص", "الحالة", "الدرجة", "التصنيف", "مقترحات المقيّم", "مقترحات إضافية (المدير/الإدارة)"]];
   const workRowsOut = [["الموظف", "العنوان", "نوع الكتابة", "نوع العمل", "نوع الإجراء", "المشروع", "مراجعة لعمل سابق؟", "التاريخ", "تسليم", "بالموعد", "جولات تعديل محتوى", "جولات تعديل نطاق"]];
 
   targets.forEach((emp) => {
     const ev = evalByEmployee[emp.id];
-    summaryRows.push([emp.name, emp.level === "senior" ? "كاتب أول" : "كاتب", specialtyLabel(emp.specialty), ev?.status || "—", ev?.totalScore ?? "—", ev?.classification || "—"]);
+    summaryRows.push([emp.name, emp.level === "senior" ? "كاتب أول" : "كاتب", specialtyLabel(emp.specialty), ev?.status || "—", ev?.totalScore ?? "—", ev?.classification || "—", ev?.comments || "—", ev?.managerComments || "—"]);
     (workByEmployee[emp.id] || []).forEach((w) => workRowsOut.push([
       emp.name, w.title, w.workType === "creative" ? "إبداعي" : "رسمي",
       w.workCategory === "أخرى" ? w.customCategory : (w.workCategory || ""), w.actionType || "", w.project || "",

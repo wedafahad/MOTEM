@@ -12,7 +12,7 @@
 
 ```json
 {
-  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | submitWorkLog | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertSelfAssessment | submitSelfAssessment | approveEval | reopenEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer | listDocuments | uploadDocument | deleteDocument | reviewDocument",
+  "action": "login | listEmployees | upsertEmployee | deleteEmployee | listWork | upsertWork | deleteWork | submitWorkLog | listBehavioral | upsertBehavioral | deleteBehavioral | listEval | upsertEval | upsertReviewNote | upsertSelfAssessment | submitSelfAssessment | approveEval | reopenEval | getSettings | setSettings | listAudit | adminLogin | changeAdminPassword | publishTopPerformer | unpublishTopPerformer | listDocuments | uploadDocument | deleteDocument | reviewDocument",
   "auth": { "code": "XXXXXX" } ,
   "payload": { }
 }
@@ -34,7 +34,9 @@
 ## الجداول (Sheets/JSON)
 
 ### Employees
-`id, name, isWriter, isEvaluator, level(writer|senior), specialty(creative|formal|general), managerId, writerCode, evaluatorCode, active, createdAt, updatedAt`
+`id, name, isWriter, isEvaluator, level(writer|senior), specialty(creative|formal|general), managerId, writerCode, evaluatorCode, active, createdAt, updatedAt, canFinalApprove, evalScopeAll, evalScopeIds[]`
+
+- **إشراف موسّع (`evalScopeAll`/`evalScopeIds`)**: إضافيّ فوق التسلسل الهرمي العادي (`managerId`) لا بديل عنه. مقيّم بـ`evalScopeAll: true` يقيّم/يطّلع (أعمال، سلوك، مستندات، تقييمات) على **كل** الكتّاب بمعزل عن التسلسل — مثال: "مدير إبداعي" بلا `managerId` (لا أحد يقيّمه) ولا فريق مباشر تحته أصلًا. مقيّم بـ`evalScopeIds: [id, ...]` يضيف كتّابًا محدَّدين بعينهم فوق تقاريره المباشرين العاديين. الدالة المرجعية: `evaluatesEmployee_` (Code.gs) / `evaluates_employee` (mock_server.py) — تُستخدَم بدل `directReports_`/`downlineIds_` وحدها في كل نقاط التحقق (upsertEval، مستندات، ownedWorkIds_/readableWorkIds_، canSeeEvalDetail_، topPerformerWritersScope_). موظف بـ`managerId: null` و`isEvaluator: true` يكتسب أيضًا صلاحيات `isOrgAdmin` (كالمدير تمامًا) بمعزل عن أي مقيّم أعلى آخر موجود بالفعل — يمكن وجود أكثر من "مدير" (بلا مدير فوقه) في آن واحد.
 
 ### WorkLog
 `id, employeeId, title, workType(creative|formal), quarter, date, project, workCategory, customCategory, actionType,
@@ -52,11 +54,11 @@ isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, soci
 - `isRevision`/`revisionOfWorkId`: إذا كان هذا العمل مراجعة/تحديثًا لعمل سابق، يُحتسب بقيمة `revisionValueMultiplier` بدل قيمة كاملة في: (أ) مؤشر "عدد الأعمال الموكلة" المرجعي، (ب) متوسط معايير ركيزة الجودة. لا يؤثر على أي مقياس آخر (عدد المشاريع، عدد أنواع النصوص، نسب الانضباط/رضا العميل).
 
 ### BehavioralLog
-`id, employeeId, quarter, indicator(brainstorming|knowledge_sharing|initiative), description, date, loggedBy, createdAt`
+`id, employeeId, quarter, indicator(brainstorming|knowledge_sharing|initiative|other), customIndicator (نص حر — إلزامي إذا indicator=other), description, date, loggedBy, createdAt`
 
 ### EvalScores
-`id, employeeId, quarter, evaluatorId, status(draft|submitted|approved), pillarScores{pillarId:{criteriaScores:{critId:score}, comment}},
-selfAssessment{critId:score}, managerAudit{critId:score, note} (محجوز — غير مفعّل، انظر ملاحظة أدناه), totalScore, classification, approvedBy, approvedAt, comments, createdAt, updatedAt,
+`id, employeeId, quarter, evaluatorId, status(draft|submitted|approved), pillarScores{pillarId:{criteriaScores:{critId:score}, criteriaReasons:{critId:text} (إلزامي عند score<3، معايير Rubric فقط)}},
+selfAssessment{critId:score}, managerAudit{critId:score, note} (محجوز — غير مفعّل، انظر ملاحظة أدناه), totalScore, classification, approvedBy, approvedAt, comments (مقترحات المقيّم الأساسي — تظهر بعد الاعتماد للكاتب والمدير وفي التصدير), managerComments (مقترحات إضافية من مدير/مقيّم بنطاق موسّع يراجع عبر شاشة "مراجعة" — حقل مستقل بمعزل عن comments، عبر action منفصل upsertReviewNote لا upsertEval), createdAt, updatedAt,
 selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt, workLogStatus(null|submitted), workLogSubmittedAt`
 
 - **`managerAudit`**: عمود محجوز بالمخطط لتدقيق مستقل لكل معيار من مدير المقيّم، لكنه **غير مفعّل فعليًا** — يبقى `{}` دائمًا. التدقيق الفعلي الحالي ثنائي فقط عبر `approveEval`/`reopenEval` (موافقة/رفض بلا درجات مستقلة). قرار مقصود حاليًا؛ بناء الخاصية الكاملة يحتاج طلبًا صريحًا لاحقًا.
@@ -81,7 +83,7 @@ selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt, workLogStatus(
 - القرار يدوي بالكامل — لا نشر تلقائي عند اعتماد أي تقييم.
 
 ### Documents (مرحلة ٤ — توثيق الكاتب)
-`id, employeeId, docType(course|initiative|interaction), fileName, mimeType, driveFileId, driveUrl, status(pending|approved|rejected), reviewedBy, reviewNote, uploadedAt, updatedAt`
+`id, employeeId, docType(course|initiative|interaction|other), customDocType (نص حر — إلزامي إذا docType=other), fileName, mimeType, driveFileId, driveUrl, status(pending|approved|rejected), reviewedBy, reviewNote, uploadedAt, updatedAt`
 
 - `docType`: مرتبط مباشرة بمعايير تقييم فعلية — `course` (النمو المهني)، `initiative`/`interaction` (التفاعل والمساهمة الجماعية). لا علاقة تلقائية بحساب الدرجة — إثبات داعم يراجعه المقيّم يدويًا فقط.
 - الرفع (`uploadDocument`): الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة. الحمولة: `{employeeId, docType, fileName, mimeType, dataBase64}` — الملف بترميز base64، بحد أقصى 8MB بعد فك الترميز.

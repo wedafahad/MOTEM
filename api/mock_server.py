@@ -127,13 +127,28 @@ def handle_admin_login(db, payload):
     return {"ok": True}
 
 
+def evaluates_employee(db, actor, employee_id):
+    """إشراف موسّع (evalScopeAll/evalScopeIds) بمعزل عن التسلسل الهرمي — يطابق evaluatesEmployee_ في Code.gs."""
+    if not actor.get("asEvaluator"):
+        return False
+    me = actor["employee"]
+    if me.get("evalScopeAll"):
+        return True
+    if employee_id in (me.get("evalScopeIds") or []):
+        return True
+    return any(r["id"] == employee_id for r in direct_reports(db, me["id"]))
+
+
 def handle_list_employees(db, actor):
-    if actor["isAdmin"]:
+    if actor["isAdmin"] or actor.get("isOrgAdmin"):
         rows = db["employees"]
+    elif actor["asEvaluator"] and actor["employee"].get("evalScopeAll"):
+        rows = db["employees"]  # إشراف موسّع على الجميع
     elif actor["asEvaluator"]:
         me = actor["employee"]
         downline = downline_ids(db, me["id"])
-        rows = [me] + [e for e in db["employees"] if e["id"] in downline]
+        extra = set(me.get("evalScopeIds") or [])
+        rows = [me] + [e for e in db["employees"] if e["id"] in downline or e["id"] in extra]
     else:
         rows = [actor["employee"]]
     return [{k: v for k, v in e.items() if k not in ("writerCode", "evaluatorCode")} |
@@ -175,30 +190,37 @@ def handle_delete_employee(db, actor, payload):
 
 
 def _owned_work_ids(db, actor):
-    """نطاق الكتابة (upsert/delete) — التقارير المباشرة فقط، لا كامل التسلسل الهرمي."""
+    """نطاق الكتابة (upsert/delete) — التقارير المباشرة + أي نطاق إشراف موسّع صريح (evalScopeAll/evalScopeIds)."""
     if actor["isAdmin"]:
-        return None  # unرestricted metadata only; handled by caller
+        return None  # unrestricted metadata only; handled by caller
     me = actor["employee"]
+    if actor["asEvaluator"] and me.get("evalScopeAll"):
+        return None  # None = بلا قيد (كل الكتّاب)
     ids = set()
     if actor["asWriter"]:
         ids.add(me["id"])
     if actor["asEvaluator"]:
         for r in direct_reports(db, me["id"]):
             ids.add(r["id"])
+        ids.update(me.get("evalScopeIds") or [])
     return ids
 
 
 def _readable_work_ids(db, actor):
-    """نطاق القراءة (list) — أوسع من نطاق الكتابة: يشمل كل من تحت المقيّم هرميًا (downline)،
-    ليقدر المدير يطّلع على سجل أعمال أي موظف تحت إشرافه غير المباشر أيضًا وقت المراجعة/الاعتماد."""
+    """نطاق القراءة (list) — أوسع من نطاق الكتابة: يشمل كل من تحت المقيّم هرميًا (downline) + أي نطاق
+    إشراف موسّع صريح، ليقدر المدير يطّلع على سجل أعمال أي موظف تحت إشرافه غير المباشر أيضًا وقت
+    المراجعة/الاعتماد، ويمكّن إشراف "المدير الإبداعي" ونحوه بمعزل عن التسلسل الهرمي."""
     if actor["isAdmin"]:
         return None
     me = actor["employee"]
+    if actor["asEvaluator"] and me.get("evalScopeAll"):
+        return None  # None = بلا قيد (كل الكتّاب)
     ids = set()
     if actor["asWriter"]:
         ids.add(me["id"])
     if actor["asEvaluator"]:
         ids.update(downline_ids(db, me["id"]))
+        ids.update(me.get("evalScopeIds") or [])
     return ids
 
 
@@ -217,13 +239,24 @@ def handle_list_work(db, actor, payload):
 
 
 def _reset_work_log_submission_if_needed(db, employee_id, quarter):
-    """لو الكاتب سبق وأرسل أعمال هذا الربع، أي تغيير لاحق على سجل أعماله لنفس الربع يُلغي حالة
-    الإرسال تلقائيًا — يطابق resetWorkLogSubmissionIfNeeded_ في Code.gs."""
+    """لو الكاتب سبق وأرسل أعمال هذا الربع، أو كان تقييمه مُرسَلًا/مُعتمَدًا، أي تغيير لاحق على سجل
+    أعماله لنفس الربع يُلغي كل ذلك تلقائيًا — يطابق resetWorkLogSubmissionIfNeeded_ في Code.gs."""
     existing = next((r for r in db["evalScores"] if r["employeeId"] == employee_id and r["quarter"] == quarter), None)
-    if existing and existing.get("workLogStatus") == "submitted":
+    if not existing:
+        return
+    changed = False
+    if existing.get("workLogStatus") == "submitted":
         existing["workLogStatus"] = None
         existing["workLogSubmittedAt"] = None
+        changed = True
+    if existing.get("status") in ("submitted", "approved"):
+        existing["status"] = "draft"
+        existing["approvedBy"] = None
+        existing["approvedAt"] = None
+        changed = True
+    if changed:
         existing["updatedAt"] = now_iso()
+        audit(db, "-", "-", "إلغاء إرسال/اعتماد التقييم تلقائيًا (تغيّر سجل الأعمال)", "EvalScores", existing["id"], quarter)
 
 
 def handle_upsert_work(db, actor, payload):
@@ -350,6 +383,10 @@ def _can_see_eval_detail(db, actor, row):
     # skip-level manager (approver) can see detail too — أي مقيّم أعلى هرميًا من صاحب التقييم
     if actor["asEvaluator"] and row.get("evaluatorId") in downline_ids(db, me["id"]):
         return True
+    # إشراف موسّع صريح (evalScopeAll/evalScopeIds) — بمعزل عن التسلسل الهرمي ومن دون اشتراط كون
+    # المُقيَّم نفسه هو المُقيِّم في هذا الصف تحديدًا.
+    if evaluates_employee(db, actor, row["employeeId"]):
+        return True
     return False
 
 
@@ -406,7 +443,7 @@ def handle_list_eval(db, actor, payload):
     for r in rows:
         is_owner_writer = actor["asWriter"] and r["employeeId"] == me["id"]
         is_owner_eval = actor["asEvaluator"] and (
-            r.get("evaluatorId") == me["id"] or r["employeeId"] in my_downline
+            r.get("evaluatorId") == me["id"] or r["employeeId"] in my_downline or evaluates_employee(db, actor, r["employeeId"])
         )
         if not (is_owner_writer or is_owner_eval):
             continue
@@ -424,9 +461,8 @@ def handle_upsert_eval(db, actor, payload):
         raise ApiError("فقط المقيّم يسجّل التقييم", 403)
     row = payload["row"]
     me = actor["employee"]
-    reports_ids = [d["id"] for d in direct_reports(db, me["id"])]
-    if row.get("employeeId") not in reports_ids:
-        raise ApiError("لا تقيّم إلا فريقك المباشر", 403)
+    if not evaluates_employee(db, actor, row.get("employeeId")):
+        raise ApiError("لا تقيّم إلا فريقك المباشر أو من ضمن نطاق إشرافك", 403)
     row["evaluatorId"] = me["id"]
     existing = next((r for r in db["evalScores"]
                       if r["employeeId"] == row["employeeId"] and r["quarter"] == row["quarter"]), None)
@@ -553,6 +589,22 @@ def handle_reopen_eval(db, actor, payload):
     return row
 
 
+def handle_upsert_review_note(db, actor, payload):
+    """يسمح لمن يرى تفاصيل التقييم (canSeeEvalDetail) بإضافة "مقترحات" خاصة به هو (managerComments)،
+    بمعزل عن مقترحات المقيّم الأساسي — يطابق handleUpsertReviewNote_ في Code.gs."""
+    if not actor.get("asEvaluator"):
+        raise ApiError("فقط المقيّم/المدير يضيف مقترحات", 403)
+    row = next((r for r in db["evalScores"] if r["id"] == payload["id"]), None)
+    if not row:
+        raise ApiError("التقييم غير موجود", 404)
+    if not _can_see_eval_detail(db, actor, row):
+        raise ApiError("لا تملك صلاحية الاطّلاع على هذا التقييم", 403)
+    row["managerComments"] = (payload.get("managerComments") or "").strip()
+    row["updatedAt"] = now_iso()
+    audit(db, "-", actor["employee"]["name"], "تحديث مقترحات إضافية على تقييم", "EvalScores", row["id"], row.get("employeeId"))
+    return row
+
+
 def handle_get_settings(db, actor):
     # ترميم دفاعي: pillars/classification مفقودة أو فارغة (خلية فاضية بالشيت الأصلي، JSON تالف جزئيًا)
     # تُستبدل بمصفوفة فارغة بدل كسر كل شاشة تعتمد عليها — لا يوجد DEFAULT_SETTINGS_ محلي هنا لإعادة بذر
@@ -629,7 +681,7 @@ def compute_category_subtotal(row, employee, settings, category):
     return weighted_sum / weight_total if weight_total > 0 else None
 
 
-DOCUMENT_TYPES = ("course", "initiative", "interaction")
+DOCUMENT_TYPES = ("course", "initiative", "interaction", "other")
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024  # 8MB بعد فك ترميز base64
 
 
@@ -648,7 +700,11 @@ def handle_list_documents(db, actor, payload):
     if actor["asWriter"]:
         allowed_ids.add(me["id"])
     if actor["asEvaluator"]:
-        allowed_ids.update(r["id"] for r in direct_reports(db, me["id"]))
+        if me.get("evalScopeAll"):
+            allowed_ids.update(e["id"] for e in db["employees"])
+        else:
+            allowed_ids.update(r["id"] for r in direct_reports(db, me["id"]))
+            allowed_ids.update(me.get("evalScopeIds") or [])
     if target_employee_id and target_employee_id not in allowed_ids:
         raise ApiError("لا تملكين صلاحية الاطّلاع على مستندات هذا الموظف", 403)
     rows = [r for r in rows if r["employeeId"] in allowed_ids]
@@ -661,11 +717,13 @@ def handle_upload_document(db, actor, payload):
         raise ApiError("الموظف مطلوب", 400)
     me = actor.get("employee")
     is_self = actor["asWriter"] and me and me["id"] == employee_id
-    is_direct_report = actor["asEvaluator"] and me and any(r["id"] == employee_id for r in direct_reports(db, me["id"]))
+    is_direct_report = evaluates_employee(db, actor, employee_id)
     if not actor["isAdmin"] and not is_self and not is_direct_report:
         raise ApiError("لا تملكين صلاحية الرفع لهذا الموظف", 403)
     if payload.get("docType") not in DOCUMENT_TYPES:
         raise ApiError("نوع مستند غير صالح", 400)
+    if payload.get("docType") == "other" and not payload.get("customDocType"):
+        raise ApiError("حدّدي نوع المستند في خانة «أخرى»", 400)
     data_b64 = payload.get("dataBase64")
     if not data_b64:
         raise ApiError("الملف مطلوب", 400)
@@ -681,6 +739,7 @@ def handle_upload_document(db, actor, payload):
     # للتطوير المحلي فقط: يُخزَّن الملف كـ data: URL بدل رفعه فعليًا لـ Drive (ذلك حصري لـ Code.gs).
     row = {
         "id": str(uuid.uuid4()), "employeeId": employee_id, "docType": payload["docType"],
+        "customDocType": payload.get("customDocType") if payload["docType"] == "other" else "",
         "fileName": payload.get("fileName") or "مستند", "mimeType": mime_type,
         "driveFileId": "", "driveUrl": f"data:{mime_type};base64,{data_b64}",
         "status": "pending", "reviewedBy": "", "reviewNote": "",
@@ -699,7 +758,7 @@ def handle_delete_document(db, actor, payload):
         raise ApiError("المستند غير موجود", 404)
     me = actor.get("employee")
     is_owner = actor["asWriter"] and me and me["id"] == doc["employeeId"]
-    is_direct_manager = actor["asEvaluator"] and me and any(r["id"] == doc["employeeId"] for r in direct_reports(db, me["id"]))
+    is_direct_manager = evaluates_employee(db, actor, doc["employeeId"])
     if not actor["isAdmin"] and not is_owner and not is_direct_manager:
         raise ApiError("لا تملكين صلاحية حذف هذا المستند", 403)
     db["documents"] = [d for d in rows if d["id"] != payload["id"]]
@@ -712,7 +771,7 @@ def handle_review_document(db, actor, payload):
         raise ApiError("المستند غير موجود", 404)
     emp = next((e for e in db["employees"] if e["id"] == doc["employeeId"]), None)
     me = actor.get("employee")
-    is_direct_manager = actor["asEvaluator"] and me and emp and emp.get("managerId") == me["id"]
+    is_direct_manager = evaluates_employee(db, actor, doc["employeeId"])
     if not actor.get("isOrgAdmin") and not is_direct_manager:
         raise ApiError("فقط المقيّم المباشر أو الإدارة/المدير يعتمدون المستندات", 403)
     if payload.get("status") not in ("approved", "rejected"):
@@ -733,8 +792,11 @@ def _top_performer_writers_scope(db, actor):
     if actor["isAdmin"] or actor.get("isOrgAdmin"):
         return all_writers
     me = actor["employee"]
+    if actor.get("asEvaluator") and me.get("evalScopeAll"):
+        return all_writers
     downline = downline_ids(db, me["id"])
-    return [e for e in all_writers if e["id"] in downline or e["id"] == me["id"]]
+    extra = set(me.get("evalScopeIds") or [])
+    return [e for e in all_writers if e["id"] in downline or e["id"] in extra or e["id"] == me["id"]]
 
 
 def handle_publish_top_performer(db, actor, payload):
@@ -831,6 +893,8 @@ def dispatch(action, auth, payload):
                 result = handle_approve_eval(db, actor, payload)
             elif action == "reopenEval":
                 result = handle_reopen_eval(db, actor, payload)
+            elif action == "upsertReviewNote":
+                result = handle_upsert_review_note(db, actor, payload)
             elif action == "getSettings":
                 result = handle_get_settings(db, actor)
             elif action == "setSettings":
