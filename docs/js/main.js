@@ -957,6 +957,30 @@ async function renderSelfAssessmentView(el) {
   };
 }
 
+/** بطاقة سياق عمل مختصرة (مشروع/نوع/إجراء/عنوان + رابط انتقال) — تُستخدم أثناء تقييم الجودة لكل عمل
+ * على حدة، وفي عرض/مراجعة التقييم بعد الاعتماد، حتى يرى المقيّم أو الإدارة سياق العمل كاملًا دون فتح
+ * سجل الأعمال بشكل منفصل. */
+function workItemContextHtml(w, wid) {
+  if (!w) return `<b>${esc(wid)}</b>`;
+  const categoryLabel = w.workCategory === "أخرى" ? w.customCategory
+    : w.workCategory === SOCIAL_PARENT_CATEGORY && w.socialSubTypes?.length ? `${w.workCategory} — ${w.socialSubTypes.join("، ")}`
+    : w.workCategory || "";
+  const metaBits = [
+    w.project ? `📁 ${esc(w.project)}` : "",
+    categoryLabel ? esc(categoryLabel) : "",
+    w.actionType ? esc(w.actionType) : "",
+  ].filter(Boolean).join(" — ");
+  return `<div class="flex-between" style="align-items:flex-start;gap:10px">
+    <div>
+      <b>${esc(w.title || wid)}</b>
+      <span class="badge ${w.workType === "creative" ? "badge-creative" : "badge-formal"}">${w.workType === "creative" ? "إبداعي" : "رسمي"}</span>
+      ${w.isRevision ? `<span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}
+      ${metaBits ? `<div class="small-muted">${metaBits}</div>` : ""}
+    </div>
+    ${w.link ? `<a class="btn btn-ghost" href="${esc(w.link)}" target="_blank" rel="noopener" title="فتح رابط العمل">↗ فتح العمل</a>` : ""}
+  </div>`;
+}
+
 function rubricSliderHtml(crit, value, disabled, reasonKey, reasonValue) {
   const v = value ?? 3;
   return `<div class="rubric-item">
@@ -1040,13 +1064,13 @@ function renderStructuredDashboard(el, { employee, row, revealValues, title, wor
     <div class="dash-tab-panel" data-panel="technical">
       <div class="card pillar-detail-card">
         <h3>القسم الفني</h3>
-        ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+        ${technical.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level, workRows)).join("")}
       </div>
     </div>
     <div class="dash-tab-panel" data-panel="behavioral">
       <div class="card pillar-detail-card">
         <h3>القسم السلوكي والمهاراتي</h3>
-        ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level)).join("")}
+        ${behavioral.map((p) => pillarStructureHtml(p, weightKey, row, revealValues, level, workRows)).join("")}
       </div>
     </div>
   </div>`;
@@ -1118,19 +1142,35 @@ function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading
   </div>`;
 }
 
-function pillarStructureHtml(p, weightKey, row, revealValues, level) {
+function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
   const pillarScore = revealValues ? pr?.pillarScore : null;
   const applicableCriteria = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
   const selfAssessment = row?.selfAssessment || {};
   // عمود "التقييم الذاتي" يظهر فقط إذا كانت هذه الركيزة السلوكية تحمل تقييمًا ذاتيًا لأحد معاييرها (بند 1.5)
   const hasSelfCol = p.category === "behavioral" && applicableCriteria.some((c) => selfAssessment[c.id] !== undefined);
+  // لركيزة الجودة فقط: تفصيل الأعمال المقيَّمة فعليًا (سياق كل عمل + الرابط) — يظهر للمقيّم والإدارة
+  // عند مراجعة/استعراض التقييم بعد الاعتماد، بدل الاكتفاء بمتوسط المعيار وحده.
+  const sampleBreakdownHtml = (p.id === "quality" && revealValues && pr?.sampleWorkIds?.length)
+    ? `<details class="anchor-details" open style="margin-bottom:12px">
+        <summary>الأعمال المقيَّمة (${pr.sampleWorkIds.length})</summary>
+        ${pr.sampleWorkIds.map((wid) => {
+          const w = (workRows || []).find((x) => x.id === wid);
+          const scoresLine = applicableCriteria.map((c) => {
+            const v = pr.perSample?.[wid]?.[c.id];
+            return `<span class="chip">${esc(c.name)}: <b>${v ?? "—"}</b></span>`;
+          }).join("");
+          return `<div class="divider"></div>${workItemContextHtml(w, wid)}<div class="chip-row" style="margin-top:6px">${scoresLine}</div>`;
+        }).join("")}
+      </details>`
+    : "";
   return `
   <div class="pillar-block">
     <div class="pillar-block-head">
       <h4>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h4>
       <b class="pillar-block-score">${revealValues ? fmt1(pillarScore) : "—"}</b>
     </div>
+    ${sampleBreakdownHtml}
     <div class="criterion-list">
       ${applicableCriteria.map((c) => {
         let weightLabel, score;
@@ -1508,7 +1548,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     box.innerHTML = ids.map((wid) => {
       const w = workRows.find((x) => x.id === wid);
       input.quality.perSample[wid] = input.quality.perSample[wid] || {};
-      return `<div class="divider"></div><b>${esc(w?.title || wid)}</b>` +
+      return `<div class="divider"></div>${workItemContextHtml(w, wid)}` +
         qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
     }).join("");
     box.querySelectorAll('input[type="range"]').forEach((inp) => {
