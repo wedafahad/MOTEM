@@ -690,9 +690,26 @@ def _documents(db):
     return db["documents"]
 
 
+def quarter_from_date(date_val):
+    """ربع افتراضي لمستند قديم رُفع قبل إضافة حقل quarter — بنفس منطق Store.currentQuarter بالواجهة."""
+    from datetime import datetime
+    if date_val:
+        try:
+            d = datetime.fromisoformat(str(date_val).replace("Z", "+00:00"))
+        except Exception:
+            d = datetime.now()
+    else:
+        d = datetime.now()
+    q = (d.month - 1) // 3 + 1
+    return f"{d.year}-Q{q}"
+
+
 def handle_list_documents(db, actor, payload):
     target_employee_id = (payload or {}).get("employeeId")
+    target_quarter = (payload or {}).get("quarter")
     rows = _documents(db)
+    if target_quarter:
+        rows = [r for r in rows if (r.get("quarter") or quarter_from_date(r.get("uploadedAt"))) == target_quarter]
     if actor["isAdmin"]:
         return [r for r in rows if r["employeeId"] == target_employee_id] if target_employee_id else rows
     me = actor["employee"]
@@ -744,6 +761,7 @@ def handle_upload_document(db, actor, payload):
         "driveFileId": "", "driveUrl": f"data:{mime_type};base64,{data_b64}",
         "status": "pending", "reviewedBy": "", "reviewNote": "",
         "uploadedAt": now, "updatedAt": now,
+        "quarter": payload.get("quarter") or quarter_from_date(now),
     }
     _documents(db).append(row)
     actor_role = "admin" if actor["isAdmin"] else ("manager" if actor.get("isOrgAdmin") else "evaluator" if actor["asEvaluator"] else "writer")

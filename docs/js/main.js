@@ -461,10 +461,10 @@ function docStatusBadge(status) {
 /** عرض عام لمستندات موظف واحد — تُستخدم لكل من "مستنداتي" (الكاتب لنفسه) و"مستندات الفريق" (المقيّم لأحد تقاريره). */
 async function renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview) {
   const s = App.session;
-  const rows = await Api.call("listDocuments", { auth: authOf(s), payload: { employeeId: forEmployeeId } });
+  const rows = await Api.call("listDocuments", { auth: authOf(s), payload: { employeeId: forEmployeeId, quarter: App.quarter } });
   el.innerHTML = `
   <div class="flex-between">
-    <h2>${readOnlyHeader || "مستنداتي"}</h2>
+    <h2>${readOnlyHeader || "مستنداتي"} <span class="small-muted">— ${App.quarter}</span></h2>
     ${canReview ? "" : `<button class="btn btn-primary" id="addDocBtn">+ إضافة مستند</button>`}
   </div>
   <p class="small-muted">توثيق داعم مرتبط بمعايير التقييم (دورات، مبادرات، تفاعل جماعي) — لا يدخل حساب الدرجة تلقائيًا، يراجعه المقيّم يدويًا.</p>
@@ -688,6 +688,7 @@ function openDocumentModal(employeeId, onSaved) {
   backdrop.innerHTML = `
   <div class="modal">
     <h3>إضافة مستند</h3>
+    <p class="small-muted" style="margin-top:-8px">سيُضاف إلى مستندات ربع <b>${App.quarter}</b> (الربع المحدَّد حاليًا أعلى الصفحة).</p>
     <div class="field"><label>النوع</label><select id="f_docType">
       ${DOCUMENT_TYPES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
     </select></div>
@@ -718,7 +719,7 @@ function openDocumentModal(employeeId, onSaved) {
       const dataBase64 = await fileToBase64_(file);
       await Api.call("uploadDocument", { auth: authOf(s), payload: {
         employeeId, docType, customDocType: docType === "other" ? customDocType : "",
-        fileName: file.name, mimeType: file.type, dataBase64,
+        fileName: file.name, mimeType: file.type, dataBase64, quarter: App.quarter,
       } });
       toast("تم الرفع");
       backdrop.remove();

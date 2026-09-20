@@ -35,7 +35,7 @@ const HEADERS = {
   Settings: ["key", "value"],
   AuditLog: ["id", "timestamp", "actorRole", "actorName", "action", "targetType", "targetId", "details"],
   Documents: ["id", "employeeId", "docType", "customDocType", "fileName", "mimeType", "driveFileId", "driveUrl",
-    "status", "reviewedBy", "reviewNote", "uploadedAt", "updatedAt"],
+    "status", "reviewedBy", "reviewNote", "uploadedAt", "updatedAt", "quarter"],
 };
 
 // مرحلة ٤ — توثيق الكاتب: أنواع المستندات الداعمة المرتبطة بمعايير تقييم فعلية (لا تدخل الحساب تلقائيًا).
@@ -816,9 +816,19 @@ function saveDocumentFile_(fileName, mimeType, dataBase64) {
 }
 
 /** الكاتب يرى مستنداته فقط. المقيّم يرى مستندات تقاريره المباشرين + مستنداته هو إن كان كاتبًا أيضًا. */
+/** ربع افتراضي لمستند قديم رُفع قبل إضافة حقل quarter — يُشتق من تاريخ الرفع، بنفس منطق
+ * Store.currentQuarter بالواجهة، حتى لا تختفي المستندات القديمة عند التصفية حسب الربع. */
+function quarterFromDate_(dateVal) {
+  const d = dateVal ? new Date(dateVal) : new Date();
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return d.getFullYear() + "-Q" + q;
+}
+
 function handleListDocuments_(actor, payload) {
   const targetEmployeeId = payload && payload.employeeId;
+  const targetQuarter = payload && payload.quarter;
   let rows = readAll_(SHEET_NAMES.DOCUMENTS);
+  if (targetQuarter) rows = rows.filter((r) => (r.quarter || quarterFromDate_(r.uploadedAt)) === targetQuarter);
   if (actor.isAdmin) {
     return targetEmployeeId ? rows.filter((r) => r.employeeId === targetEmployeeId) : rows;
   }
@@ -856,6 +866,7 @@ function handleUploadDocument_(actor, payload) {
     driveFileId: saved.driveFileId, driveUrl: saved.driveUrl,
     status: "pending", reviewedBy: "", reviewNote: "",
     uploadedAt: now, updatedAt: now,
+    quarter: payload.quarter || quarterFromDate_(now),
   };
   upsertRow_(SHEET_NAMES.DOCUMENTS, row);
   audit_(actor.isAdmin ? "admin" : actor.isOrgAdmin ? "manager" : actor.asEvaluator ? "evaluator" : "writer",

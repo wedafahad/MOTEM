@@ -83,13 +83,14 @@ selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt, workLogStatus(
 - القرار يدوي بالكامل — لا نشر تلقائي عند اعتماد أي تقييم.
 
 ### Documents (مرحلة ٤ — توثيق الكاتب)
-`id, employeeId, docType(course|initiative|interaction|other), customDocType (نص حر — إلزامي إذا docType=other), fileName, mimeType, driveFileId, driveUrl, status(pending|approved|rejected), reviewedBy, reviewNote, uploadedAt, updatedAt`
+`id, employeeId, docType(course|initiative|interaction|other), customDocType (نص حر — إلزامي إذا docType=other), fileName, mimeType, driveFileId, driveUrl, status(pending|approved|rejected), reviewedBy, reviewNote, uploadedAt, updatedAt, quarter`
 
 - `docType`: مرتبط مباشرة بمعايير تقييم فعلية — `course` (النمو المهني)، `initiative`/`interaction` (التفاعل والمساهمة الجماعية). لا علاقة تلقائية بحساب الدرجة — إثبات داعم يراجعه المقيّم يدويًا فقط.
-- الرفع (`uploadDocument`): الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة. الحمولة: `{employeeId, docType, fileName, mimeType, dataBase64}` — الملف بترميز base64، بحد أقصى 8MB بعد فك الترميز.
+- `quarter`: كل مستند مرتبط بربع محدَّد (نفس الربع المُختار في الواجهة وقت الرفع، تمامًا كـ WorkLog/BehavioralLog) — «مستنداتي» ومستندات الفريق تُصفَّى دائمًا حسب الربع الحالي المختار، لا عرض تراكمي لكل الأرباع معًا. مستندات رُفعت قبل إضافة هذا الحقل (`quarter` فارغ في الصف) تُحتسَب تلقائيًا لربع مشتق من `uploadedAt` (`quarterFromDate_`/`quarter_from_date`) بدل أن تختفي من كل الأرباع.
+- الرفع (`uploadDocument`): الكاتب يرفع لنفسه فقط، والمقيّم يرفع لأي عضو من تقاريره المباشرة/نطاقه الموسّع. الحمولة: `{employeeId, docType, fileName, mimeType, dataBase64, quarter}` — الملف بترميز base64، بحد أقصى 8MB بعد فك الترميز؛ `quarter` هو الربع المختار حاليًا بالواجهة (`App.quarter`)، وإن غاب من الحمولة يُشتق من تاريخ الرفع.
 - التخزين الفعلي: `Code.gs` يحفظ الملف في مجلد Drive واحد تابع لنفس حساب تشغيل الـ Web App (`Execute as: Me`) — لا يحتاج تفعيل أي API خارجي إضافي، فقط موافقة صلاحية Drive تُطلَب تلقائيًا عند أول نشر (Deploy) بعد إضافة هذا الكود. رابط الملف (`driveUrl`) يُضبط كـ "Anyone with the link: Viewer"، ويُخزَّن في الشيت فقط — لا يُعرض إلا لمن يملك صلاحية رؤية الصف أصلًا. `mock_server.py` يخزّن الملف محليًا كـ `data:` URL بدل Drive، للتطوير فقط.
-- الاعتماد/الرفض (`reviewDocument`): حصري للمقيّم المباشر لصاحب المستند (`managerId == evaluatorId`) أو الإدارة/المدير. الحمولة: `{id, status(approved|rejected), note}`.
-- القراءة (`listDocuments`): الكاتب يرى مستنداته فقط، والمقيّم يرى مستنداته هو (إن كان كاتبًا أيضًا) + مستندات تقاريره المباشرين، والإدارة ترى الكل.
+- الاعتماد/الرفض (`reviewDocument`): حصري للمقيّم المباشر لصاحب المستند (أو نطاقه الموسّع) أو الإدارة/المدير. الحمولة: `{id, status(approved|rejected), note}`.
+- القراءة (`listDocuments`): الحمولة تقبل `quarter` اختياريًا للتصفية (كما `employeeId`) — الكاتب يرى مستنداته فقط، والمقيّم يرى مستنداته هو (إن كان كاتبًا أيضًا) + مستندات تقاريره المباشرين/نطاقه الموسّع، والإدارة ترى الكل.
 
 ### AuditLog
 `id, timestamp, actorRole, actorName, action, targetType, targetId, details`
