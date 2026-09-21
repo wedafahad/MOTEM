@@ -222,10 +222,10 @@ function navItemsFor(session) {
     // "سجل أعمال الموظفين" الأشمل بالأسفل (كل الكتّاب)، فيُستبعَد له تحديدًا تفاديًا للتكرار.
     // "سجل السلوك" هنا (بلا "ي") يعرض سجل وقائع فريقك المباشر كاملًا — يقابل "سجل الأعمال" أعلاه تمامًا.
     // للمدير (أعلى الهرم) هذا مُتضمَّن بالكامل أصلًا في "سجل سلوك الموظفين" الأشمل أدناه (كل الكتّاب).
-    if (!isTopManager) items.push(["team-behavioral", "سجل السلوك"]);
+    if (!isTopManager) items.push(["team-behavioral", "سجل سلوك الفريق"]);
     // مرحلة ٤ — أي مقيّم (لا فقط المدير) يعتمد مستندات تقاريره المباشرين (نفس صلاحية reviewDocument بالخادم).
     items.push(["team-documents", "مستندات الفريق"]);
-    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["behavioral", "سجل السلوك"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
+    if (session.asWriter) items.push(["my-worklog", "سجل أعمالي"], ["behavioral", "سجل سلوكي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]);
     // دمج 2.2: "المدير" (أعلى مقيّم بلا مدير فوقه) يكتسب أيضًا شاشات الإدارة العامة التشغيلية —
     // بما فيها سجل السلوك الكامل لكل الكتّاب (لا فريقه المباشر فقط)، تمامًا كسجل أعمال الموظفين.
     if (isTopManager) {
@@ -236,7 +236,7 @@ function navItemsFor(session) {
     items.push(["export", "التصدير"]);
     return items;
   }
-  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["behavioral", "سجل السلوك"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]];
+  return [["dashboard", "لوحتي"], ["worklog", "سجل أعمالي"], ["behavioral", "سجل سلوكي"], ["self", "تقييمي الذاتي"], ["documents", "مستنداتي"]];
 }
 
 // شاشات "تفاصيل" صالحة لكن غير مدرَجة في القائمة الجانبية (يُفتَح عليها من زر داخل شاشة أخرى، لا من التنقّل المباشر)
@@ -303,7 +303,8 @@ function renderView() {
     "team-documents": renderTeamDocumentsView,
   };
   (map[App.view] || renderDashboardView)(el).catch((err) => {
-    el.innerHTML = `<div class="error-box">${esc(err.message)}</div>`;
+    el.innerHTML = `<div class="error-box" role="alert">${esc(err.message)}</div><button class="btn" id="retryViewBtn">إعادة المحاولة</button>`;
+    el.querySelector("#retryViewBtn").onclick = renderView;
   });
 }
 
@@ -1459,7 +1460,7 @@ async function renderEvaluateView(el) {
   </div>
   <div id="evalBody"><div class="empty-state"><span class="spinner"></span></div></div>`;
 
-  el.querySelectorAll("#targetPicker button").forEach((b) => (b.onclick = () => { App.evalTargetId = b.dataset.id; renderEvaluateView(el); }));
+  el.querySelectorAll("#targetPicker button").forEach((b) => (b.onclick = () => { App.evalTargetId = b.dataset.id; renderView(); }));
 
   const [workRows, behavioralRows, evalRows] = await Promise.all([
     Api.call("listWork", { auth: authOf(s), payload: { employeeId: targetId, quarter: App.quarter } }),
@@ -2224,7 +2225,7 @@ async function renderSettingsView(el) {
     settings.revisionValueMultiplier = Number(document.getElementById("revMult").value) || 0.5;
     // إصلاح: منع الحفظ محليًا فورًا لو اختل مجموع الأوزان — بدل انتظار رفض الخادم (الذي يتحقق من هذا أيضًا كخط دفاع ثانٍ)
     const sw = sumWeights("weightWriter"), ss = sumWeights("weightSenior");
-    if (Math.abs(sw - 100) > 0.1) return toast(`مجموع أوزان الكاتب ${sw}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
+    if (Math.abs(sw - 100) > 0.05) return toast(`مجموع أوزان الكاتب ${sw}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
     if (Math.abs(ss - 100) > 0.05) return toast(`مجموع أوزان الكاتب الأول ${ss}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
     try {
       const saved = await Api.call("setSettings", { auth: authOf(s), payload: { settings } });

@@ -15,6 +15,9 @@ const Api = (() => {
       throw new Error("تعذّر الاتصال بالخادم — تحقّقي من الاتصال بالإنترنت. (" + err.message + ")");
     }
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error("تعذّر الوصول إلى خدمة البيانات (HTTP 404). أعيدي المحاولة؛ إذا استمر الخطأ، يلزم التحقق من رابط نشر الخادم وصلاحية الوصول إليه.");
+      }
       throw new Error("الخادم أعاد خطأ HTTP " + res.status);
     }
     let json;
@@ -23,15 +26,15 @@ const Api = (() => {
     } catch (err) {
       throw new Error("رد الخادم غير صالح (ليس JSON) — تأكد من رابط النشر الصحيح لـ Apps Script");
     }
+    if (!json || typeof json !== "object" || typeof json.ok !== "boolean") {
+      throw new Error("استجابة الخادم لا تطابق صيغة البيانات المتوقعة");
+    }
     if (!json.ok) {
       throw new Error(json.error || "خطأ غير معروف من الخادم");
     }
-    // حماية عامة: أي إجراء "list*" يجب أن يُرجع مصفوفة دومًا. لو رجع أي شيء آخر (استجابة تالفة/جزئية من
-    // الخادم بسبب ضغط أو انقطاع مؤقت)، نُرجع مصفوفة فارغة بدل ما ننهار بخطأ "X.filter is not a function"
-    // في كل شاشة تستخدم هذا الإجراء — مع تنبيه بالـ console يساعد بالتشخيص لاحقًا.
+    // لا نعرض البيانات التالفة كسجل فارغ؛ يجب إبقاء فشل التحميل ظاهرًا للمستخدم.
     if (action.indexOf("list") === 0 && !Array.isArray(json.data)) {
-      console.warn("Api.call: توقعت مصفوفة من " + action + " ووصل شيء آخر — تم التعويض بمصفوفة فارغة.", json.data);
-      return [];
+      throw new Error("تعذّر تحميل القائمة: استجابة الخادم غير صالحة. أعيدي المحاولة.");
     }
     return json.data;
   }
