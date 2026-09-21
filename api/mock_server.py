@@ -763,6 +763,9 @@ def handle_upload_document(db, actor, payload):
         raise ApiError("نوع مستند غير صالح", 400)
     if payload.get("docType") == "other" and not payload.get("customDocType"):
         raise ApiError("حدّدي نوع المستند في خانة «أخرى»", 400)
+    import re
+    if not re.fullmatch(r"[0-9]{4}-Q[1-4]", payload.get("quarter") or ""):
+        raise ApiError("اختاري الربع المرتبط بالمستند", 400)
     data_b64 = payload.get("dataBase64")
     if not data_b64:
         raise ApiError("الملف مطلوب", 400)
@@ -789,6 +792,22 @@ def handle_upload_document(db, actor, payload):
     actor_role = "admin" if actor["isAdmin"] else ("manager" if actor.get("isOrgAdmin") else "evaluator" if actor["asEvaluator"] else "writer")
     audit(db, actor_role, "الإدارة" if actor["isAdmin"] else actor["employee"]["name"], "رفع مستند", "Documents", row["id"], row["fileName"])
     return row
+
+
+def handle_set_document_quarter(db, actor, payload):
+    import re
+    doc = next((d for d in _documents(db) if d["id"] == payload.get("id")), None)
+    if not doc:
+        raise ApiError("المستند غير موجود", 404)
+    owner = actor.get("asWriter") and actor.get("employee", {}).get("id") == doc["employeeId"]
+    if not actor.get("isAdmin") and not owner and not evaluates_employee(db, actor, doc["employeeId"]):
+        raise ApiError("لا تملكين صلاحية تعديل ربع هذا المستند", 403)
+    if not re.fullmatch(r"[0-9]{4}-Q[1-4]", payload.get("quarter") or ""):
+        raise ApiError("الربع غير صالح", 400)
+    old = doc.get("quarter") or "غير محدد"
+    doc.update(quarter=payload["quarter"], updatedAt=now_iso())
+    audit(db, "admin" if actor.get("isAdmin") else "employee", "الإدارة" if actor.get("isAdmin") else actor["employee"]["name"], "تصحيح ربع مستند", "Documents", doc["id"], old + " → " + payload["quarter"])
+    return doc
 
 
 def handle_delete_document(db, actor, payload):
@@ -953,6 +972,8 @@ def dispatch(action, auth, payload):
                 result = handle_upload_document(db, actor, payload)
             elif action == "deleteDocument":
                 result = handle_delete_document(db, actor, payload)
+            elif action == "setDocumentQuarter":
+                result = handle_set_document_quarter(db, actor, payload)
             elif action == "reviewDocument":
                 result = handle_review_document(db, actor, payload)
             else:

@@ -887,6 +887,7 @@ function handleUploadDocument_(actor, payload) {
   if (DOCUMENT_TYPES.indexOf(payload.docType) === -1) throw new ApiError("نوع مستند غير صالح", 400);
   if (payload.docType === "other" && !payload.customDocType) throw new ApiError("حدّدي نوع المستند في خانة «أخرى»", 400);
   if (!payload.dataBase64) throw new ApiError("الملف مطلوب", 400);
+  if (!/^\d{4}-Q[1-4]$/.test(payload.quarter || "")) throw new ApiError("اختاري الربع المرتبط بالمستند", 400);
   const saved = saveDocumentFile_(payload.fileName, payload.mimeType, payload.dataBase64);
   const now = nowIso();
   const row = {
@@ -902,6 +903,19 @@ function handleUploadDocument_(actor, payload) {
   audit_(actor.isAdmin ? "admin" : actor.isOrgAdmin ? "manager" : actor.asEvaluator ? "evaluator" : "writer",
     actor.isAdmin ? "الإدارة" : actor.employee.name, "رفع مستند", "Documents", row.id, row.fileName);
   return row;
+}
+
+function handleSetDocumentQuarter_(actor, payload) {
+  const doc = findOne_(SHEET_NAMES.DOCUMENTS, (d) => d.id === payload.id);
+  if (!doc) throw new ApiError("المستند غير موجود", 404);
+  const owner = actor.asWriter && actor.employee && actor.employee.id === doc.employeeId;
+  if (!actor.isAdmin && !owner && !evaluatesEmployee_(actor, doc.employeeId)) throw new ApiError("لا تملكين صلاحية تعديل ربع هذا المستند", 403);
+  if (!/^\d{4}-Q[1-4]$/.test(payload.quarter || "")) throw new ApiError("الربع غير صالح", 400);
+  const updated = Object.assign({}, doc, { quarter: payload.quarter, updatedAt: nowIso() });
+  upsertRow_(SHEET_NAMES.DOCUMENTS, updated);
+  audit_(actor.isAdmin ? "admin" : "employee", actor.isAdmin ? "الإدارة" : actor.employee.name,
+    "تصحيح ربع مستند", "Documents", doc.id, (doc.quarter || "غير محدد") + " → " + payload.quarter);
+  return updated;
 }
 
 function handleDeleteDocument_(actor, payload) {
@@ -1066,6 +1080,7 @@ function dispatch_(action, auth, payload) {
       case "listDocuments": data = handleListDocuments_(actor, payload); break;
       case "uploadDocument": data = handleUploadDocument_(actor, payload); break;
       case "deleteDocument": data = handleDeleteDocument_(actor, payload); break;
+      case "setDocumentQuarter": data = handleSetDocumentQuarter_(actor, payload); break;
       case "reviewDocument": data = handleReviewDocument_(actor, payload); break;
       default: throw new ApiError("إجراء غير معروف: " + action, 400);
     }

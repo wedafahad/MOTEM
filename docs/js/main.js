@@ -509,11 +509,15 @@ async function renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview)
         ${canReview && d.status === "pending" ? `
           <button class="btn btn-sm btn-primary approve-doc" data-id="${d.id}">اعتماد</button>
           <button class="btn btn-sm btn-ghost reject-doc" data-id="${d.id}">رفض</button>` : ""}
+        <button class="btn btn-sm edit-doc-quarter" data-id="${d.id}">تصحيح الربع</button>
         ${!canReview ? `<button class="icon-btn text-danger del-doc" data-id="${d.id}">حذف</button>` : ""}
       </td>
     </tr>`).join("") || `<tr><td colspan="6" class="empty-state">لا توجد مستندات بعد</td></tr>`}</tbody>
   </table></div></div>`;
 
+  el.querySelectorAll(".edit-doc-quarter").forEach((button) => {
+    button.onclick = () => openDocumentQuarterModal(rows.find((d) => d.id === button.dataset.id), () => renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview));
+  });
   const addBtn = document.getElementById("addDocBtn");
   if (addBtn) addBtn.onclick = () => openDocumentModal(forEmployeeId, () => renderDocumentsView(el, forEmployeeId, readOnlyHeader, canReview));
   el.querySelectorAll(".del-doc").forEach((b) => (b.onclick = async () => {
@@ -710,6 +714,29 @@ function fileToBase64_(file) {
   });
 }
 
+function documentQuarterOptions(selected) {
+  return [...new Set([selected, ...Store.quarterOptions(12)])].filter(Boolean).map((q) => `<option value="${esc(q)}" ${q === selected ? "selected" : ""}>${esc(q)}</option>`).join("");
+}
+
+function openDocumentQuarterModal(doc, onSaved) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `<div class="modal"><h3>تصحيح ربع المستند</h3><p>${esc(doc.fileName)}</p><div class="field"><label for="documentQuarter">الربع المرتبط بالمستند</label><select id="documentQuarter">${documentQuarterOptions(doc.quarter || App.quarter)}</select></div><p class="small-muted">يُنقل المستند إلى الربع المختار مع بقاء الملف وتاريخ الرفع وحالة المراجعة.</p><button class="btn" id="cancelQuarter">إلغاء</button><button class="btn btn-primary" id="saveQuarter">حفظ</button></div>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector("#cancelQuarter").onclick = () => backdrop.remove();
+  backdrop.querySelector("#saveQuarter").onclick = async () => {
+    const button = backdrop.querySelector("#saveQuarter");
+    button.disabled = true;
+    const quarter = backdrop.querySelector("#documentQuarter").value;
+    try {
+      await Api.call("setDocumentQuarter", {auth: authOf(App.session), payload: {id: doc.id, quarter}});
+      backdrop.remove();
+      toast(`تم نقل المستند إلى ${quarter}`);
+      onSaved();
+    } catch (err) { toast(err.message); button.disabled = false; }
+  };
+}
+
 function openDocumentModal(employeeId, onSaved) {
   const s = App.session;
   const backdrop = document.createElement("div");
@@ -717,7 +744,8 @@ function openDocumentModal(employeeId, onSaved) {
   backdrop.innerHTML = `
   <div class="modal">
     <h3>إضافة مستند</h3>
-    <p class="small-muted" style="margin-top:-8px">سيُضاف إلى مستندات ربع <b>${App.quarter}</b> (الربع المحدَّد حاليًا أعلى الصفحة).</p>
+    <div class="field"><label for="f_docQuarter">الربع المرتبط بالمستند</label><select id="f_docQuarter">${documentQuarterOptions(App.quarter)}</select></div>
+    <p class="small-muted">اختاري الربع الذي يخصّه المستند، حتى لو رُفع لاحقًا. تاريخ الرفع يبقى محفوظًا للتوثيق.</p>
     <div class="field"><label>النوع</label><select id="f_docType">
       ${DOCUMENT_TYPES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
     </select></div>
@@ -748,7 +776,7 @@ function openDocumentModal(employeeId, onSaved) {
       const dataBase64 = await fileToBase64_(file);
       await Api.call("uploadDocument", { auth: authOf(s), payload: {
         employeeId, docType, customDocType: docType === "other" ? customDocType : "",
-        fileName: file.name, mimeType: file.type, dataBase64, quarter: App.quarter,
+        fileName: file.name, mimeType: file.type, dataBase64, quarter: backdrop.querySelector("#f_docQuarter").value,
       } });
       toast("تم الرفع");
       backdrop.remove();
