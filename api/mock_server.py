@@ -259,12 +259,32 @@ def _reset_work_log_submission_if_needed(db, employee_id, quarter):
         audit(db, "-", "-", "إلغاء إرسال/اعتماد التقييم تلقائيًا (تغيّر سجل الأعمال)", "EvalScores", existing["id"], quarter)
 
 
+def quarter_for_work_date(value):
+    if not isinstance(value, str) or len(value) != 10:
+        return None
+    try:
+        date = datetime.date.fromisoformat(value)
+        if date.isoformat() != value:
+            return None
+        return f"{date.year:04d}-Q{(date.month - 1) // 3 + 1}"
+    except ValueError:
+        return None
+
+
 def handle_upsert_work(db, actor, payload):
     row = payload["row"]
     allowed = _owned_work_ids(db, actor)
     if allowed is not None and row.get("employeeId") not in allowed:
         raise ApiError("لا تملك صلاحية تعديل أعمال هذا الموظف", 403)
     existing = next((r for r in db["workLog"] if r["id"] == row.get("id")), None)
+    if existing and allowed is not None and existing["employeeId"] not in allowed:
+        raise ApiError("لا تملك صلاحية تعديل هذا العمل", 403)
+    old_employee = existing["employeeId"] if existing else None
+    old_quarter = existing["quarter"] if existing else None
+    quarter = quarter_for_work_date(row.get("date", existing.get("date") if existing else None))
+    if not quarter:
+        raise ApiError("تاريخ العمل مطلوب ويجب أن يكون تاريخًا صحيحًا", 400)
+    row["quarter"] = quarter
     actor_name = "الإدارة" if actor["isAdmin"] else actor["employee"]["name"]
     if existing:
         existing.update(row)
@@ -279,6 +299,8 @@ def handle_upsert_work(db, actor, payload):
         db["workLog"].append(row)
         audit(db, "-", actor_name, "إضافة عمل", "WorkLog", row["id"], row.get("title"))
         saved = row
+    if existing and (old_employee != saved["employeeId"] or old_quarter != saved["quarter"]):
+        _reset_work_log_submission_if_needed(db, old_employee, old_quarter)
     _reset_work_log_submission_if_needed(db, saved["employeeId"], saved["quarter"])
     return saved
 

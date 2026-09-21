@@ -455,33 +455,23 @@ function resetWorkLogSubmissionIfNeeded_(employeeId, quarter) {
 
 // ✅ حساب الربع من التاريخ — إذا أضاف كاتب عملاً بتاريخ خارج الربع الحالي، ننقله للربع الصحيح
 function getQuarterFromDate_(dateStr) {
-  if (!dateStr) return null;
-  try {
-    const date = new Date(dateStr);
-    const month = date.getMonth() + 1; // 1-12
-    const year = date.getFullYear();
-    const quarter = Math.ceil(month / 3); // 1-4
-    return `Q${quarter}-${year}`;
-  } catch (e) {
-    console.warn("⚠️ Invalid date:", dateStr, e);
-    return null;
-  }
+  if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const parsed = new Date(dateStr + "T00:00:00Z");
+  if (year < 1 || !Number.isFinite(parsed.getTime()) || parsed.getUTCFullYear() !== year || parsed.getUTCMonth() + 1 !== month || parsed.getUTCDate() !== day) return null;
+  return `${dateStr.slice(0, 4)}-Q${Math.ceil(month / 3)}`;
 }
 
 function handleUpsertWork_(actor, payload) {
   const row = payload.row;
   const allowed = ownedWorkIds_(actor);
   if (allowed && !allowed[row.employeeId]) throw new ApiError("لا تملك صلاحية تعديل أعمال هذا الموظف", 403);
-  // ✅ إذا كان للعمل تاريخ خارج الربع الحالي، انقله للربع الصحيح
-  if (row.date) {
-    const dateQuarter = getQuarterFromDate_(row.date);
-    if (dateQuarter && row.quarter !== dateQuarter) {
-      console.log(`📅 تصحيح الربع: العمل بتاريخ ${row.date} → ينتقل من ${row.quarter} إلى ${dateQuarter}`);
-      row.quarter = dateQuarter;
-    }
-  }
-  const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   const existing = row.id ? findOne_(SHEET_NAMES.WORKLOG, (r) => r.id === row.id) : null;
+  if (existing && allowed && !allowed[existing.employeeId]) throw new ApiError("لا تملك صلاحية تعديل هذا العمل", 403);
+  const dateQuarter = getQuarterFromDate_(row.date === undefined && existing ? existing.date : row.date);
+  if (!dateQuarter) throw new ApiError("تاريخ العمل مطلوب ويجب أن يكون تاريخًا صحيحًا", 400);
+  row.quarter = dateQuarter;
+  const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   let saved;
   if (existing) {
     const merged = Object.assign({}, existing, row, { updatedAt: nowIso() });
@@ -494,6 +484,9 @@ function handleUpsertWork_(actor, payload) {
     upsertRow_(SHEET_NAMES.WORKLOG, row);
     audit_("-", actorName, "إضافة عمل", "WorkLog", row.id, row.title);
     saved = row;
+  }
+  if (existing && (existing.quarter !== saved.quarter || existing.employeeId !== saved.employeeId)) {
+    resetWorkLogSubmissionIfNeeded_(existing.employeeId, existing.quarter);
   }
   resetWorkLogSubmissionIfNeeded_(saved.employeeId, saved.quarter);
   return saved;

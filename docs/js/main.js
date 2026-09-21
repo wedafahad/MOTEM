@@ -904,6 +904,8 @@ function openWorkModal(employeeId, existing, onSaved) {
       notes: document.getElementById("f_notes").value.trim(),
       collaborators: existing?.collaborators || [{ employeeId, sharePercent: 100 }],
     };
+    row.quarter = Store.quarterForWorkDate(row.date);
+    if (!row.quarter) return toast("أدخلي تاريخًا صحيحًا للعمل");
     if (!row.title) return toast("العنوان مطلوب");
     if (!row.link) return toast("رابط العمل مطلوب");
     if (row.workCategory === "أخرى" && !row.customCategory) return toast("حدّد نوع العمل في خانة «أخرى»");
@@ -911,8 +913,8 @@ function openWorkModal(employeeId, existing, onSaved) {
     if (cat.hasSubType && !row.project) return toast("اسم المشروع إجباري لمنشورات وسائل التواصل — يجمع كل الأنواع تحت مشروع واحد");
     if (row.isRevision && !row.revisionOfWorkId) return toast("اختر العمل الأصلي الذي رُوجِع");
     try {
-      await Api.call("upsertWork", { auth: authOf(s), payload: { row } });
-      toast("تم الحفظ");
+      const saved = await Api.call("upsertWork", { auth: authOf(s), payload: { row } });
+      toast(saved.quarter !== App.quarter ? `تم حفظ العمل في ربعه حسب التاريخ: ${saved.quarter}` : "تم الحفظ");
       backdrop.remove();
       onSaved();
     } catch (err) { toast(err.message); }

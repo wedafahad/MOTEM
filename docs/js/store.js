@@ -24,6 +24,14 @@ const Store = (() => {
     return `${d.getFullYear()}-Q${q}`;
   }
 
+function quarterForWorkDate(dateStr) {
+  if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const parsed = new Date(dateStr + "T00:00:00Z");
+  if (year < 1 || !Number.isFinite(parsed.getTime()) || parsed.getUTCFullYear() !== year || parsed.getUTCMonth() + 1 !== month || parsed.getUTCDate() !== day) return null;
+  return `${dateStr.slice(0, 4)}-Q${Math.ceil(month / 3)}`;
+}
+
   function quarterOptions(count = 6) {
     const now = new Date();
     let y = now.getFullYear();
@@ -40,5 +48,5 @@ const Store = (() => {
     return out;
   }
 
-  return { get, set, clear, currentQuarter, quarterOptions };
+  return { get, set, clear, currentQuarter, quarterOptions, quarterForWorkDate };
 })();
