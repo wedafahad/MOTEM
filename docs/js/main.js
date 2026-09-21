@@ -394,7 +394,7 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
       : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubTypes?.length ? `${r.workCategory} — ${r.socialSubTypes.join("، ")}`
       : r.workCategory || "";
     return `<tr data-id="${r.id}">
-      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}${r.excludedFromEval ? ` <span class="badge badge-draft" title="مستثنى من التقييم${r.exclusionReason ? " — " + esc(r.exclusionReason) : ""}">مستثنى من التقييم</span>` : ""}
+      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}
         <div class="small-muted">${esc(categoryLabel)}${r.actionType ? " — " + esc(r.actionType) : ""}</div></td>
       <td><span class="badge ${r.workType === "creative" ? "badge-creative" : "badge-formal"}">${r.workType === "creative" ? "إبداعي" : "رسمي"}</span></td>
       <td>${esc(r.date || "—")}</td>
@@ -785,10 +785,6 @@ function openWorkModal(employeeId, existing, onSaved) {
     </div>
     <div class="checkbox-row"><input type="checkbox" id="f_isCollaborative" ${existing?.isCollaborative ? "checked" : ""}><label>عمل مشترك (أكثر من كاتب شارك في إنجازه)</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_isRevision" ${existing?.isRevision ? "checked" : ""}><label>هذا العمل مراجعة/تحديث لعمل سابق (يُحتسب بقيمة مخفَّضة في مؤشرات الكمية)</label></div>
-    <div class="checkbox-row"><input type="checkbox" id="f_excludedFromEval" ${existing?.excludedFromEval ? "checked" : ""}><label>استثناء هذا العمل من التقييم (لا تنطبق عليه معايير التقييم — لأي سبب: روتيني، لم يُراجعه المقيّم، خارج النطاق... إلخ)</label></div>
-    <div class="field" id="f_exclusionReasonWrap" style="display:${existing?.excludedFromEval ? "block" : "none"}">
-      <label>سبب الاستثناء (اختياري)</label><input type="text" id="f_exclusionReason" value="${esc(existing?.exclusionReason || "")}" placeholder="مثال: عمل روتيني / لم يُراجعه المقيّم بعد / خارج نطاق التقييم">
-    </div>
     <div class="field" id="f_revisionOfWrap" style="display:none">
       <label>العمل الأصلي</label><select id="f_revisionOf"><option value="">جارٍ التحميل...</option></select>
     </div>
@@ -850,10 +846,6 @@ function openWorkModal(employeeId, existing, onSaved) {
   refreshRevisionUi();
   isRevisionCb.onchange = refreshRevisionUi;
 
-  const excludedCb = backdrop.querySelector("#f_excludedFromEval");
-  const exclusionReasonWrap = backdrop.querySelector("#f_exclusionReasonWrap");
-  excludedCb.onchange = () => { exclusionReasonWrap.style.display = excludedCb.checked ? "block" : "none"; };
-
   backdrop.querySelector("#saveModal").onclick = async () => {
     const workCategory = categorySelect.value;
     const customCategory = document.getElementById("f_customCategory").value.trim();
@@ -872,8 +864,6 @@ function openWorkModal(employeeId, existing, onSaved) {
         ? Array.from(backdrop.querySelectorAll(".f_socialSubType:checked")).map((i) => i.value)
         : [],
       isCollaborative: document.getElementById("f_isCollaborative").checked,
-      excludedFromEval: document.getElementById("f_excludedFromEval").checked,
-      exclusionReason: document.getElementById("f_excludedFromEval").checked ? document.getElementById("f_exclusionReason").value.trim() : "",
       actionType: actionSelect.value,
       isRevision: isRevisionCb.checked,
       revisionOfWorkId: isRevisionCb.checked ? (revisionOfSelect.value || null) : null,
@@ -1175,6 +1165,17 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
         }).join("")}
       </details>`
     : "";
+  // شفافية: قائمة الأعمال التي استثناها المقيّم من التقييم لهذا الربع مع سبب كل استثناء إن وُجد.
+  const excludedBreakdownHtml = (p.id === "quality" && revealValues && pr?.excludedWorkIds?.length)
+    ? `<details class="anchor-details" style="margin-bottom:12px">
+        <summary>أعمال مستثناة من التقييم (${pr.excludedWorkIds.length})</summary>
+        ${pr.excludedWorkIds.map((wid) => {
+          const w = (workRows || []).find((x) => x.id === wid);
+          const reason = pr.exclusionReasons?.[wid];
+          return `<div class="divider"></div>${workItemContextHtml(w, wid)}${reason ? `<p class="small-muted" style="margin-top:6px"><b>سبب الاستثناء:</b> ${esc(reason)}</p>` : ""}`;
+        }).join("")}
+      </details>`
+    : "";
   return `
   <div class="pillar-block">
     <div class="pillar-block-head">
@@ -1182,6 +1183,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
       <b class="pillar-block-score">${revealValues ? fmt1(pillarScore) : "—"}</b>
     </div>
     ${sampleBreakdownHtml}
+    ${excludedBreakdownHtml}
     <div class="criterion-list">
       ${applicableCriteria.map((c) => {
         let weightLabel, score;
@@ -1474,18 +1476,22 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
   const input = existing?.pillarScores ? JSON.parse(JSON.stringify(existing.pillarScores)) : {};
   const selfAssessment = existing?.selfAssessment || {};
-  // أعمال مستثناة من التقييم (excludedFromEval) — لأي سبب (روتيني، لم يُراجعه المقيّم، خارج النطاق...):
-  // تبقى ظاهرة في سجل الأعمال لكنها مستثناة كليًا من التقييم: لا تدخل ركيزة الجودة ولا مقاييس
-  // الانضباط/رضا العميل، فلا تؤثر على الدرجة النهائية إطلاقًا.
-  const evaluableWorkRows = workRows.filter((w) => !w.excludedFromEval);
-  const excludedFromEvalCount = workRows.length - evaluableWorkRows.length;
-  const metrics = Calc.computeMetrics(evaluableWorkRows);
   const locked = existing?.status === "approved"; // مُعتمَد — للتعديل يجب إعادة الفتح أولًا (زر أدناه)
 
   const qualityPillar = settings.pillars.find((p) => p.id === "quality");
-  // لا عيّنة: يُقيَّم كل عمل مسجَّل هذا الربع غير المستثنى من التقييم — تُحدَّث القائمة تلقائيًا
-  // مع أي عمل يُضاف لاحقًا
+  // استثناء عمل من التقييم قرار يتخذه المقيّم أثناء التقييم نفسه (لا الكاتب عند تسجيل العمل) — لأي
+  // سبب يمنع الحكم عليه بمعايير الكتابة (لم يُراجَع، خارج النطاق، روتيني...). يُحفظ ضمن هذا التقييم
+  // تحديدًا (pillarScores.quality)، لا كخاصية دائمة على سجل العمل، فيبقى العمل ظاهرًا في سجل الأعمال
+  // كما هو دون أي أثر على شاشة إضافته. الاستبعاد يُقصي العمل كليًا من ركيزة الجودة ومن مقاييس
+  // computeMetrics (تسليم بالموعد/إنجاز مهام/جولات تعديل) التي تغذّي رضا العميل والانضباط — فلا يؤثر
+  // على الدرجة النهائية إطلاقًا.
   input.quality = input.quality || { sampleWorkIds: [], perSample: {} };
+  input.quality.excludedWorkIds = input.quality.excludedWorkIds || [];
+  input.quality.exclusionReasons = input.quality.exclusionReasons || {};
+  const excludedSet = new Set(input.quality.excludedWorkIds);
+  const evaluableWorkRows = workRows.filter((w) => !excludedSet.has(w.id));
+  const excludedFromEvalCount = workRows.length - evaluableWorkRows.length;
+  const metrics = Calc.computeMetrics(evaluableWorkRows);
   input.quality.sampleWorkIds = evaluableWorkRows.map((w) => w.id);
 
   const otherPillars = settings.pillars.filter((p) => p.id !== "quality" && (p[weightKey] || 0) > 0);
@@ -1562,18 +1568,49 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
 
   function renderSampleForms() {
     const box = el.querySelector("#sampleForms");
-    const ids = input.quality.sampleWorkIds;
-    if (!ids.length) { box.innerHTML = `<p class="small-muted">اختر عملًا واحدًا على الأقل من الأعلى.</p>`; return; }
-    box.innerHTML = ids.map((wid) => {
-      const w = workRows.find((x) => x.id === wid);
+    if (!workRows.length) { box.innerHTML = `<p class="small-muted">لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.</p>`; return; }
+    box.innerHTML = workRows.map((w) => {
+      const wid = w.id;
+      const isExcluded = input.quality.excludedWorkIds.indexOf(wid) !== -1;
       input.quality.perSample[wid] = input.quality.perSample[wid] || {};
-      return `<div class="divider"></div>${workItemContextHtml(w, wid)}` +
-        qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
+      const exclusionHtml = `
+        <label class="checkbox-row" style="margin-top:8px"><input type="checkbox" class="exclude-work-cb" data-wid="${wid}" ${isExcluded ? "checked" : ""} ${locked ? "disabled" : ""}><span>استثناء هذا العمل من التقييم (لا تنطبق عليه معايير الكتابة — لأي سبب)</span></label>
+        <div class="field exclusion-reason-wrap" data-wid="${wid}" style="display:${isExcluded ? "block" : "none"};margin-top:4px">
+          <input type="text" class="exclusion-reason-input" data-wid="${wid}" value="${esc(input.quality.exclusionReasons[wid] || "")}" placeholder="سبب الاستثناء (اختياري)" ${locked ? "disabled" : ""}>
+        </div>`;
+      const bodyHtml = isExcluded
+        ? `<p class="small-muted" style="margin-top:8px">مستثنى من التقييم — لا يُحتسب ضمن درجة الجودة أو مقاييس التسليم/الإنجاز.</p>`
+        : qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
+      return `<div class="divider"></div>${workItemContextHtml(w, wid)}${exclusionHtml}${bodyHtml}`;
     }).join("");
     box.querySelectorAll('input[type="range"]').forEach((inp) => {
       inp.oninput = () => recomputeLive();
       inp.addEventListener("change", () => recomputeLive());
     });
+    box.querySelectorAll(".exclude-work-cb").forEach((cb) => {
+      cb.onchange = () => {
+        const wid = cb.dataset.wid;
+        if (cb.checked) {
+          if (input.quality.excludedWorkIds.indexOf(wid) === -1) input.quality.excludedWorkIds.push(wid);
+        } else {
+          input.quality.excludedWorkIds = input.quality.excludedWorkIds.filter((id) => id !== wid);
+        }
+        rerenderWithCurrentInput();
+      };
+    });
+    box.querySelectorAll(".exclusion-reason-input").forEach((inp) => {
+      inp.oninput = () => { input.quality.exclusionReasons[inp.dataset.wid] = inp.value; };
+    });
+  }
+
+  /** إعادة رسم كامل الشاشة بعد تغيير نطاق استثناء الجودة، حتى تتحدّث بطاقات المقاييس (تسليم/إنجاز/جولات
+   * تعديل) المتأثرة بتغيّر evaluableWorkRows — مع الحفاظ على كل الدرجات/الأسباب/المقترحات غير المحفوظة
+   * بعد بتمريرها كـ "existing" مؤقت لإعادة الرسم. */
+  function rerenderWithCurrentInput() {
+    recomputeLive();
+    const commentsEl = document.getElementById("evalComments");
+    const snapshot = { ...(existing || {}), pillarScores: JSON.parse(JSON.stringify(input)), comments: commentsEl ? commentsEl.value : (existing?.comments || "") };
+    renderEvalForm(el, employee, workRows, behavioralRows, snapshot);
   }
 
   function recomputeLive() {

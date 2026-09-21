@@ -25,7 +25,7 @@ const HEADERS = {
     "isRevision", "revisionOfWorkId",
     "delivered", "onTime", "firstDraftAccepted", "contentRevisionRounds", "scopeRevisionRounds", "collaboratorsJSON",
     "link", "notes", "createdBy", "createdAt", "updatedAt",
-    "socialSubType", "isCollaborative", "socialSubTypesJSON", "excludedFromEval", "exclusionReason"],
+    "socialSubType", "isCollaborative", "socialSubTypesJSON"],
   BehavioralLog: ["id", "employeeId", "quarter", "indicator", "customIndicator", "description", "date", "loggedBy", "createdAt"],
   EvalScores: ["id", "employeeId", "quarter", "evaluatorId", "status", "pillarScoresJSON",
     "selfAssessmentJSON", "managerAuditJSON", "totalScore", "classification", "approvedBy",

@@ -41,18 +41,7 @@
 ### WorkLog
 `id, employeeId, title, workType(creative|formal), quarter, date, project, workCategory, customCategory, actionType,
 delivered, onTime, firstDraftAccepted (مهمَل — انظر ملاحظة أدناه), contentRevisionRounds, scopeRevisionRounds, collaborators[{employeeId,sharePercent}],
-isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative, excludedFromEval, exclusionReason`
-
-- **`excludedFromEval` (استثناء من التقييم — لأي سبب، لا "روتيني" فقط)**: بعض الأعمال المسجَّلة قد لا
-  تنطبق عليها معايير الكتابة، أو لأي سبب آخر يجعلها غير قابلة للحكم عليها ضمن التقييم (عمل روتيني/إداري،
-  لم يُراجعه المقيّم من قبل، خارج نطاق التقييم، إلخ) — السبب حر ولا يُقيَّد بقائمة محدَّدة. عند تفعيل هذا
-  الخيار عند تسجيل/تعديل العمل (مع `exclusionReason` نصي اختياري يوثّق السبب)، يبقى العمل ظاهرًا في سجل
-  الأعمال (للتوثيق الكامل لحجم العمل الفعلي، مع شارة "مستثنى من التقييم") لكنه يُستبعَد كليًا من حساب
-  التقييم لنفس الربع: لا يظهر ضمن "الأعمال المقيَّمة" لركيزة الجودة، ولا يدخل في حساب مقاييس
-  `computeMetrics` (نسبة التسليم بالموعد، نسبة إنجاز المهام، متوسط جولات التعديل) التي تغذّي ركيزتي "رضا
-  العميل" و"الانضباط التشغيلي" — أي لا يؤثر إطلاقًا على الدرجة النهائية. الاستبعاد يتم بالكامل في الواجهة
-  (`docs/js/main.js` يبني `evaluableWorkRows` بتصفية `excludedFromEval` قبل تمرير الأعمال لمحرك `Calc`)،
-  لا حاجة لتعديل `calc.js` نفسه.
+isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative`
 
 - **إرسال أعمال الربع (`submitWorkLog`)**: الكاتب فقط، لنفسه، بعد وجود عمل واحد على الأقل مسجَّل لهذا الربع. يُنشئ/يحدّث صف `EvalScores` لنفس الربع ويضبط `workLogStatus: "submitted"` و`workLogSubmittedAt`. هذه علامة معلوماتية يراها المقيّم (في «فريقي» وأعلى شاشة التقييم) — **لا تقفل** سجل الأعمال: أي `upsertWork`/`deleteWork` لاحق لنفس الموظف/الربع يُلغي `workLogStatus` تلقائيًا (`resetWorkLogSubmissionIfNeeded_`)، فتحتاج الكاتبة إرسالها مرة أخرى.
 
@@ -73,6 +62,17 @@ selfAssessment{critId:score}, managerAudit{critId:score, note} (محجوز — �
 selfAssessmentStatus(draft|submitted), selfAssessmentSubmittedAt, workLogStatus(null|submitted), workLogSubmittedAt`
 
 - **`managerAudit`**: عمود محجوز بالمخطط لتدقيق مستقل لكل معيار من مدير المقيّم، لكنه **غير مفعّل فعليًا** — يبقى `{}` دائمًا. التدقيق الفعلي الحالي ثنائي فقط عبر `approveEval`/`reopenEval` (موافقة/رفض بلا درجات مستقلة). قرار مقصود حاليًا؛ بناء الخاصية الكاملة يحتاج طلبًا صريحًا لاحقًا.
+- **استثناء عمل من التقييم (`pillarScores.quality.excludedWorkIds[]` / `exclusionReasons{workId:text}`)**: قرار
+  يتخذه المقيّم أثناء التقييم نفسه — لا الكاتب عند تسجيل العمل في سجل الأعمال — لأي عمل لا تنطبق عليه
+  معايير الكتابة (لم يُراجَع بعد، خارج النطاق، روتيني، أو أي سبب آخر حر لا يُقيَّد بقائمة محدَّدة، يُوثَّق
+  اختياريًا في `exclusionReasons`). يُحفظ ضمن تقييم هذا الربع تحديدًا داخل `pillarScores.quality`، وليس
+  كخاصية دائمة على WorkLog، فسجل الأعمال وشاشة إضافة/تعديل عمل لا يعرضان أي أثر لهذا الاستثناء إطلاقًا.
+  عند الاستثناء، يُستبعَد العمل كليًا من `sampleWorkIds` (لا يُقيَّم بمعايير الجودة) ومن `computeMetrics`
+  (نسبة التسليم بالموعد، نسبة إنجاز المهام، متوسط جولات التعديل) التي تغذّي ركيزتي "رضا العميل"
+  و"الانضباط التشغيلي" — فلا يؤثر إطلاقًا على الدرجة النهائية (`renderEvalForm` يبني `evaluableWorkRows`
+  بتصفية `excludedWorkIds` قبل تمرير الأعمال لمحرك `Calc`؛ لا حاجة لتعديل `calc.js` نفسه). شاشتا
+  اللوحة/المراجعة (`pillarStructureHtml`) تعرضان قائمتين منفصلتين تحت ركيزة الجودة: "الأعمال المقيَّمة"
+  و"أعمال مستثناة من التقييم" (مع السبب إن وُجد) للشفافية.
 - **آلية التقييم الذاتي**: الكاتب يحفظ تقييمه الذاتي حفظًا قابلًا للتعديل عبر `upsertSelfAssessment` ما دام `selfAssessmentStatus != "submitted"`. الحدث الذي يُقفله نهائيًا هو فعل الكاتب نفسه: استدعاء `submitSelfAssessment` (زر "اعتماد تقييمي الذاتي" في الواجهة) — بعده يرفض الخادم أي `upsertSelfAssessment` لاحق لنفس الربع. قبل الاعتماد، لا يرى المقيّم قيم `selfAssessment` إطلاقًا (يعود فارغًا `{}` من `listEval`)؛ بعد الاعتماد (`selfAssessmentStatus === "submitted"`، بمعزل عن اعتماد المقيّم لكامل التقييم) يظهر كاملًا. هذا منفصل تمامًا عن `status`/`approveEval` (اعتماد المقيّم لتقييمه هو ككل).
 - **إصلاح — رؤية الكاتب لتقييمها الذاتي هي نفسها**: `handleListEval_` كانت تُخفي صف الكاتب بالكامل عن نفسها ما دام `status !== "approved"` (بما فيها `selfAssessment`/`selfAssessmentStatus`/`workLogStatus` الخاصة بها هي)، فتظهر شاشتا «تقييمي الذاتي» و«سجل أعمالي» فارغتين وغير مقفلتين فور الإرسال رغم أن الحفظ نجح فعليًا (الخادم كان يرفض أي تعديل لاحق، لكن الواجهة تعرض حالة مضلِّلة). الإصلاح (`redactForOwnerWriterPending_`): قبل اعتماد المقيّم، الكاتب يرى دومًا حالة/قيم تقييمها الذاتي وحالة إرسال أعمالها هي (`workLogStatus`)، ويبقى محجوبًا فقط عن `pillarScores`/`totalScore`/`classification`/`comments` (درجات المقيّم) حتى الاعتماد — كما كان القصد أصلًا.
 - في شاشة/تقرير التقييم النهائي (بعد `status === "approved"`)، لكل معيار سلوكي له `selfAssessment[critId]` تُعرَض قيمتا الكاتب الذاتية وقيمة المقيّم (`pillarScores[pillarId].criteriaScores[critId]`) جنبًا لجنب، لا رقمًا مدمجًا واحدًا. أثناء التقييم نفسه (قبل الاعتماد)، شاشة التقييم (`renderEvalForm`) تعرض أيضًا شريط درجة الكاتب الذاتية أعلى كل معيار سلوكي فور إرسالها له، بمعزل عن اعتماد التقييم.
