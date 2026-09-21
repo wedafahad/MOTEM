@@ -140,6 +140,7 @@ function authOf(session) {
 
 /* =========================== تسجيل الدخول =========================== */
 function renderLogin(errorMsg) {
+  Api.clearCache();
   Store.clear();
   let activeTab = "writer";
   const draw = () => {
@@ -257,6 +258,7 @@ function renderShell() {
       <div class="topbar-right">
         ${s.role !== "admin" ? `<select id="quarterSel"></select>` : ""}
         <div class="who"><b>${esc(name)}</b>${esc(roleLabel)}</div>
+        <button class="btn btn-sm" id="refreshBtn">تحديث البيانات</button>
         <button class="btn btn-sm" id="logoutBtn">خروج</button>
       </div>
     </div>
@@ -269,6 +271,10 @@ function renderShell() {
   </div>`;
 
   document.getElementById("logoutBtn").onclick = logout;
+  document.getElementById("refreshBtn").onclick = () => {
+    Api.clearCache();
+    renderView();
+  };
   document.querySelectorAll(".nav-btn").forEach((b) => (b.onclick = () => { App.view = b.dataset.v; renderShell(); }));
 
   const qSel = document.getElementById("quarterSel");
@@ -304,7 +310,7 @@ function renderView() {
   };
   (map[App.view] || renderDashboardView)(el).catch((err) => {
     el.innerHTML = `<div class="error-box" role="alert">${esc(err.message)}</div><button class="btn" id="retryViewBtn">إعادة المحاولة</button>`;
-    el.querySelector("#retryViewBtn").onclick = renderView;
+    el.querySelector("#retryViewBtn").onclick = () => { Api.clearCache(); renderView(); };
   });
 }
 
@@ -1282,11 +1288,11 @@ async function renderTeamView(el) {
   // كان كاتبًا)، مطابقًا تمامًا لنطاق topPerformerWritersScope_ على الخادم — يظهر دائمًا في "فريقي".
   const extraScopeIds = new Set(s.employee.evalScopeAll ? employees.map((e) => e.id) : (s.employee.evalScopeIds || []));
   const myWriterScope = employees.filter((e) => e.isWriter && (e.id === s.employee.id || myDownlineIds.has(e.id) || extraScopeIds.has(e.id)));
-  const topPerformersHtml = await topPerformerSectionHtml(s, myWriterScope);
+
 
   el.innerHTML = `
   <h2>فريقي — ${App.quarter}</h2>
-  ${topPerformersHtml}
+  <div class="top-performer-slot"><p class="small-muted">جارٍ تحميل ملخص الربع السابق…</p></div>
   ${pendingApprovals.length ? `
   <div class="card">
     <h3>بانتظار اعتمادك</h3>
@@ -1368,7 +1374,7 @@ async function renderTeamView(el) {
     App.view = "review";
     renderShell();
   }));
-  wireTopPerformerButtons(el, s, () => renderTeamView(el));
+  loadTopPerformerSection(el.querySelector(".top-performer-slot"), s, myWriterScope, () => renderView());
 }
 
 /* عرض قراءة فقط لتفاصيل تقييم موظف تحت إشراف غير مباشر (للتدقيق قبل الاعتماد) */
@@ -1888,6 +1894,23 @@ async function topPerformerSectionHtml(s, writers) {
   </div>`;
 }
 
+// تحميل الملخص مستقل عن جدول الفريق؛ فشله لا يخفي بيانات الربع الحالي.
+async function loadTopPerformerSection(slot, session, writers, rerender) {
+  try {
+    const html = await topPerformerSectionHtml(session, writers);
+    if (!slot.isConnected) return;
+    slot.innerHTML = html;
+    wireTopPerformerButtons(slot, session, rerender);
+  } catch (err) {
+    if (!slot.isConnected) return;
+    slot.innerHTML = `<div class="error-box" role="alert">تعذّر تحميل ملخص الربع السابق: ${esc(err.message)}</div><button class="btn btn-sm">إعادة المحاولة</button>`;
+    slot.querySelector("button").onclick = () => {
+      slot.innerHTML = `<p class="small-muted">جارٍ تحميل ملخص الربع السابق…</p>`;
+      loadTopPerformerSection(slot, session, writers, rerender);
+    };
+  }
+}
+
 /** ربط أزرار النشر/إلغاء النشر بعد إدراج topPerformerSectionHtml في innerHTML — لأي شاشة تستخدمها. */
 function wireTopPerformerButtons(el, s, rerender) {
   const prevQuarter = Store.quarterOptions()[1];
@@ -1918,12 +1941,12 @@ async function renderAdminOverviewView(el) {
     Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
   ]);
   const writers = employees.filter((e) => e.isWriter);
-  const topPerformersHtml = await topPerformerSectionHtml(s, writers);
+
 
   el.innerHTML = `
   <div class="flex-between"><h2>نظرة عامة — ${App.quarter}</h2>
   <select id="qSel2">${Store.quarterOptions().map((q) => `<option ${q === App.quarter ? "selected" : ""}>${q}</option>`).join("")}</select></div>
-  ${topPerformersHtml}
+  <div class="top-performer-slot"><p class="small-muted">جارٍ تحميل ملخص الربع السابق…</p></div>
   <p class="small-muted">تعرض الإدارة الحالة والدرجة الإجمالية فقط، دون تفاصيل المعايير أو تعليقات المقيّم، حفاظًا على خصوصية التقييم.</p>
   <div class="card"><div class="table-wrap"><table>
     <thead><tr><th>الاسم</th><th>المستوى</th><th>المقيّم</th><th>الحالة</th><th>الدرجة</th><th>التصنيف</th><th></th></tr></thead>
@@ -1942,7 +1965,7 @@ async function renderAdminOverviewView(el) {
     App.view = "review";
     renderShell();
   }));
-  wireTopPerformerButtons(el, s, () => renderAdminOverviewView(el));
+  loadTopPerformerSection(el.querySelector(".top-performer-slot"), s, writers, () => renderView());
 }
 
 /* =========================== إدارة: الموظفون =========================== */

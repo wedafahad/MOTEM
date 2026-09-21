@@ -2,7 +2,48 @@
 // رابط الخادم ثابت داخل config.js (API_BASE_URL) — لا يُطلب من المستخدم إدخاله ولا يُخزَّن في localStorage.
 
 const Api = (() => {
-  async function call(action, { auth, payload } = {}) {
+  const READ_ACTIONS = new Set(["getSettings", "listEmployees", "listWork", "listBehavioral", "listEval", "listDocuments", "listAudit"]);
+  const CACHE_MS = 15000;
+  // ذاكرة مؤقتة داخل التبويب فقط، منفصلة حسب الحساب والربع وتُمسح عند الحفظ والخروج.
+  const cache = new Map();
+  const pending = new Map();
+  let generation = 0;
+  const copy = (data) => data === undefined ? undefined : JSON.parse(JSON.stringify(data));
+
+  function clearCache() {
+    generation += 1;
+    cache.clear();
+    pending.clear();
+  }
+
+  async function call(action, options = {}) {
+    if (!READ_ACTIONS.has(action)) {
+      // فشل النقل لا يضمن عدم حفظ الخادم؛ أبطل الذاكرة حتى عند الخطأ.
+      clearCache();
+      try { return await request(action, options); }
+      finally { clearCache(); }
+    }
+    const key = JSON.stringify([action, options.auth || {}, options.payload || {}]);
+    const hit = cache.get(key);
+    if (hit && hit.expires > Date.now()) return copy(hit.data);
+    const epoch = generation;
+    let promise = pending.get(key);
+    if (!promise) {
+      promise = request(action, options).then((data) => {
+        if (epoch === generation) {
+          if (cache.size >= 60) cache.delete(cache.keys().next().value);
+          cache.set(key, { data: copy(data), expires: Date.now() + CACHE_MS });
+        }
+        return data;
+      }).finally(() => {
+        if (pending.get(key) === promise) pending.delete(key);
+      });
+      pending.set(key, promise);
+    }
+    return copy(await promise);
+  }
+
+  async function request(action, { auth, payload } = {}) {
     let res;
     try {
       res = await fetch(API_BASE_URL, {
@@ -39,5 +80,5 @@ const Api = (() => {
     return json.data;
   }
 
-  return { call };
+  return { call, clearCache };
 })();

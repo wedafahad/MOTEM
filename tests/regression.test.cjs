@@ -44,3 +44,44 @@ test('API distinguishes unavailable service, invalid lists and genuine empty lis
   await assert.rejects(api({ok:true,json:async()=>({ok:false,error:'denied'})}), /denied/);
   assert.equal((await api({ok:true,json:async()=>({ok:true,data:[]})})).length,0);
 });
+
+test('read cache deduplicates requests, clones results, expires and isolates accounts', async () => {
+  let calls = 0, now = 0;
+  const context = vm.createContext({Date:{now:()=>now}, fetch:async()=>{ calls++; return {ok:true,json:async()=>({ok:true,data:[{name:'original'}]})}; }, API_BASE_URL:'test'});
+  vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
+  const run = (code) => vm.runInContext(code,context);
+  const [a,b] = await Promise.all([run("Api.call('listEval',{auth:{code:'a'}})"),run("Api.call('listEval',{auth:{code:'a'}})")]);
+  assert.equal(calls,1); a[0].name='changed'; assert.equal(b[0].name,'original');
+  assert.equal((await run("Api.call('listEval',{auth:{code:'a'}})"))[0].name,'original');
+  assert.equal(calls,1);
+  await run("Api.call('listEval',{auth:{code:'b'}})"); assert.equal(calls,2);
+  now=15001; await run("Api.call('listEval',{auth:{code:'a'}})"); assert.equal(calls,3);
+  await run("Api.call('upsertEval')"); await run("Api.call('listEval',{auth:{code:'a'}})"); assert.equal(calls,5);
+  run('Api.clearCache()'); await run("Api.call('listEval',{auth:{code:'a'}})"); assert.equal(calls,6);
+});
+test('in-flight reads cannot refill cache after invalidation', async () => {
+  let finish, calls=0;
+  const context=vm.createContext({API_BASE_URL:'test', fetch:()=>{ calls++; return new Promise(resolve=>{ finish=()=>resolve({ok:true,json:async()=>({ok:true,data:[]})}); }); }});
+  vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
+  const first=vm.runInContext("Api.call('listEval')",context);
+  vm.runInContext('Api.clearCache()',context); finish(); await first;
+  const second=vm.runInContext("Api.call('listEval')",context); assert.equal(calls,2); finish(); await second;
+});
+test('team renders before previous-quarter response and keeps table on summary failure', async () => {
+  let rejectSummary;
+  const slot={isConnected:true,innerHTML:'',querySelector:()=>({})};
+  const el={innerHTML:'',querySelectorAll:()=>[],querySelector:()=>slot};
+  const context=vm.createContext({Store:{currentQuarter:()=> '2026-Q3',quarterOptions:()=>['2026-Q3','2026-Q2']},document:{addEventListener(){}},Api:{call:async(action,{payload}={})=>{
+    if(action==='listEmployees') return [{id:'writer',isWriter:true,managerId:'manager',name:'Writer'}];
+    if(payload?.quarter==='2026-Q2') return new Promise((_,reject)=>{rejectSummary=reject;});
+    return [];
+  }},el});
+  vm.runInContext(fs.readFileSync('docs/js/main.js','utf8'),context);
+  vm.runInContext("App.session={role:'evaluator',code:'test',employee:{id:'manager'}}; App.settings={};",context);
+  await vm.runInContext('renderTeamView(el)',context);
+  assert.match(el.innerHTML,/Writer/);
+  rejectSummary(new Error('HTTP 404'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(el.innerHTML,/Writer/);
+  assert.match(slot.innerHTML,/HTTP 404/);
+});
