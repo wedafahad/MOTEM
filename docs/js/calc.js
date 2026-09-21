@@ -69,13 +69,14 @@ const Calc = (() => {
       return w && w.isRevision ? mult : 1;
     };
     const criteriaAvg = {};
+    let samplesComplete = sampleWorkIds.length > 0;
     for (const c of qualityPillar.criteria) {
       // متوسط مرجّح: عينات "مراجعة لعمل سابق" تُحتسب بقيمة مخفَّضة بدل قيمة كاملة مكررة
       let weightedSum = 0;
       let weightSum = 0;
       sampleWorkIds.forEach((wid) => {
         const v = perSample?.[wid]?.[c.id];
-        if (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 5) return;
+        if (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 5) { samplesComplete = false; return; }
         const w = weightOfSample(wid);
         weightedSum += Number(v) * w;
         weightSum += w;
@@ -83,7 +84,7 @@ const Calc = (() => {
       criteriaAvg[c.id] = weightSum > 0 ? weightedSum / weightSum : null;
     }
     let pillarScore = null;
-    const complete = qualityPillar.criteria.every((c) => criteriaAvg[c.id] !== null);
+    const complete = samplesComplete && qualityPillar.criteria.every((c) => criteriaAvg[c.id] !== null);
     if (complete) {
       pillarScore = qualityPillar.criteria.reduce(
         (sum, c) => sum + (criteriaAvg[c.id] * weights[c.id]) / 100,

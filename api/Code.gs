@@ -157,8 +157,8 @@ function readAll_(sheetName) {
 function upsertRow_(sheetName, obj, idField) {
   idField = idField || "id";
   const sheet = getSheet_(sheetName);
-  const headers = HEADERS[sheetName];
   const values = sheet.getDataRange().getValues();
+  const headers = values[0];
   const idCol = headers.indexOf(idField);
   for (let r = 1; r < values.length; r++) {
     if (values[r][idCol] === obj[idField]) {
@@ -177,8 +177,8 @@ function upsertRow_(sheetName, obj, idField) {
 function deleteRow_(sheetName, id, idField) {
   idField = idField || "id";
   const sheet = getSheet_(sheetName);
-  const headers = HEADERS[sheetName];
   const values = sheet.getDataRange().getValues();
+  const headers = values[0];
   const idCol = headers.indexOf(idField);
   for (let r = 1; r < values.length; r++) {
     if (values[r][idCol] === id) {
