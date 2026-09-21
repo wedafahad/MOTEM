@@ -41,7 +41,18 @@
 ### WorkLog
 `id, employeeId, title, workType(creative|formal), quarter, date, project, workCategory, customCategory, actionType,
 delivered, onTime, firstDraftAccepted (مهمَل — انظر ملاحظة أدناه), contentRevisionRounds, scopeRevisionRounds, collaborators[{employeeId,sharePercent}],
-isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative`
+isRevision, revisionOfWorkId, link, notes, createdBy, createdAt, updatedAt, socialSubTypes[], isCollaborative, excludedFromEval, exclusionReason`
+
+- **`excludedFromEval` (استثناء من التقييم — لأي سبب، لا "روتيني" فقط)**: بعض الأعمال المسجَّلة قد لا
+  تنطبق عليها معايير الكتابة، أو لأي سبب آخر يجعلها غير قابلة للحكم عليها ضمن التقييم (عمل روتيني/إداري،
+  لم يُراجعه المقيّم من قبل، خارج نطاق التقييم، إلخ) — السبب حر ولا يُقيَّد بقائمة محدَّدة. عند تفعيل هذا
+  الخيار عند تسجيل/تعديل العمل (مع `exclusionReason` نصي اختياري يوثّق السبب)، يبقى العمل ظاهرًا في سجل
+  الأعمال (للتوثيق الكامل لحجم العمل الفعلي، مع شارة "مستثنى من التقييم") لكنه يُستبعَد كليًا من حساب
+  التقييم لنفس الربع: لا يظهر ضمن "الأعمال المقيَّمة" لركيزة الجودة، ولا يدخل في حساب مقاييس
+  `computeMetrics` (نسبة التسليم بالموعد، نسبة إنجاز المهام، متوسط جولات التعديل) التي تغذّي ركيزتي "رضا
+  العميل" و"الانضباط التشغيلي" — أي لا يؤثر إطلاقًا على الدرجة النهائية. الاستبعاد يتم بالكامل في الواجهة
+  (`docs/js/main.js` يبني `evaluableWorkRows` بتصفية `excludedFromEval` قبل تمرير الأعمال لمحرك `Calc`)،
+  لا حاجة لتعديل `calc.js` نفسه.
 
 - **إرسال أعمال الربع (`submitWorkLog`)**: الكاتب فقط، لنفسه، بعد وجود عمل واحد على الأقل مسجَّل لهذا الربع. يُنشئ/يحدّث صف `EvalScores` لنفس الربع ويضبط `workLogStatus: "submitted"` و`workLogSubmittedAt`. هذه علامة معلوماتية يراها المقيّم (في «فريقي» وأعلى شاشة التقييم) — **لا تقفل** سجل الأعمال: أي `upsertWork`/`deleteWork` لاحق لنفس الموظف/الربع يُلغي `workLogStatus` تلقائيًا (`resetWorkLogSubmissionIfNeeded_`)، فتحتاج الكاتبة إرسالها مرة أخرى.
 

@@ -394,7 +394,7 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
       : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubTypes?.length ? `${r.workCategory} — ${r.socialSubTypes.join("، ")}`
       : r.workCategory || "";
     return `<tr data-id="${r.id}">
-      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}
+      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}${r.excludedFromEval ? ` <span class="badge badge-draft" title="مستثنى من التقييم${r.exclusionReason ? " — " + esc(r.exclusionReason) : ""}">مستثنى من التقييم</span>` : ""}
         <div class="small-muted">${esc(categoryLabel)}${r.actionType ? " — " + esc(r.actionType) : ""}</div></td>
       <td><span class="badge ${r.workType === "creative" ? "badge-creative" : "badge-formal"}">${r.workType === "creative" ? "إبداعي" : "رسمي"}</span></td>
       <td>${esc(r.date || "—")}</td>
@@ -785,6 +785,10 @@ function openWorkModal(employeeId, existing, onSaved) {
     </div>
     <div class="checkbox-row"><input type="checkbox" id="f_isCollaborative" ${existing?.isCollaborative ? "checked" : ""}><label>عمل مشترك (أكثر من كاتب شارك في إنجازه)</label></div>
     <div class="checkbox-row"><input type="checkbox" id="f_isRevision" ${existing?.isRevision ? "checked" : ""}><label>هذا العمل مراجعة/تحديث لعمل سابق (يُحتسب بقيمة مخفَّضة في مؤشرات الكمية)</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="f_excludedFromEval" ${existing?.excludedFromEval ? "checked" : ""}><label>استثناء هذا العمل من التقييم (لا تنطبق عليه معايير التقييم — لأي سبب: روتيني، لم يُراجعه المقيّم، خارج النطاق... إلخ)</label></div>
+    <div class="field" id="f_exclusionReasonWrap" style="display:${existing?.excludedFromEval ? "block" : "none"}">
+      <label>سبب الاستثناء (اختياري)</label><input type="text" id="f_exclusionReason" value="${esc(existing?.exclusionReason || "")}" placeholder="مثال: عمل روتيني / لم يُراجعه المقيّم بعد / خارج نطاق التقييم">
+    </div>
     <div class="field" id="f_revisionOfWrap" style="display:none">
       <label>العمل الأصلي</label><select id="f_revisionOf"><option value="">جارٍ التحميل...</option></select>
     </div>
@@ -846,6 +850,10 @@ function openWorkModal(employeeId, existing, onSaved) {
   refreshRevisionUi();
   isRevisionCb.onchange = refreshRevisionUi;
 
+  const excludedCb = backdrop.querySelector("#f_excludedFromEval");
+  const exclusionReasonWrap = backdrop.querySelector("#f_exclusionReasonWrap");
+  excludedCb.onchange = () => { exclusionReasonWrap.style.display = excludedCb.checked ? "block" : "none"; };
+
   backdrop.querySelector("#saveModal").onclick = async () => {
     const workCategory = categorySelect.value;
     const customCategory = document.getElementById("f_customCategory").value.trim();
@@ -864,6 +872,8 @@ function openWorkModal(employeeId, existing, onSaved) {
         ? Array.from(backdrop.querySelectorAll(".f_socialSubType:checked")).map((i) => i.value)
         : [],
       isCollaborative: document.getElementById("f_isCollaborative").checked,
+      excludedFromEval: document.getElementById("f_excludedFromEval").checked,
+      exclusionReason: document.getElementById("f_excludedFromEval").checked ? document.getElementById("f_exclusionReason").value.trim() : "",
       actionType: actionSelect.value,
       isRevision: isRevisionCb.checked,
       revisionOfWorkId: isRevisionCb.checked ? (revisionOfSelect.value || null) : null,
@@ -1464,13 +1474,19 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
   const input = existing?.pillarScores ? JSON.parse(JSON.stringify(existing.pillarScores)) : {};
   const selfAssessment = existing?.selfAssessment || {};
-  const metrics = Calc.computeMetrics(workRows);
+  // أعمال مستثناة من التقييم (excludedFromEval) — لأي سبب (روتيني، لم يُراجعه المقيّم، خارج النطاق...):
+  // تبقى ظاهرة في سجل الأعمال لكنها مستثناة كليًا من التقييم: لا تدخل ركيزة الجودة ولا مقاييس
+  // الانضباط/رضا العميل، فلا تؤثر على الدرجة النهائية إطلاقًا.
+  const evaluableWorkRows = workRows.filter((w) => !w.excludedFromEval);
+  const excludedFromEvalCount = workRows.length - evaluableWorkRows.length;
+  const metrics = Calc.computeMetrics(evaluableWorkRows);
   const locked = existing?.status === "approved"; // مُعتمَد — للتعديل يجب إعادة الفتح أولًا (زر أدناه)
 
   const qualityPillar = settings.pillars.find((p) => p.id === "quality");
-  // لا عيّنة: يُقيَّم كل عمل مسجَّل هذا الربع بلا استثناء — تُحدَّث القائمة تلقائيًا مع أي عمل يُضاف لاحقًا
+  // لا عيّنة: يُقيَّم كل عمل مسجَّل هذا الربع غير المستثنى من التقييم — تُحدَّث القائمة تلقائيًا
+  // مع أي عمل يُضاف لاحقًا
   input.quality = input.quality || { sampleWorkIds: [], perSample: {} };
-  input.quality.sampleWorkIds = workRows.map((w) => w.id);
+  input.quality.sampleWorkIds = evaluableWorkRows.map((w) => w.id);
 
   const otherPillars = settings.pillars.filter((p) => p.id !== "quality" && (p[weightKey] || 0) > 0);
   const technicalPillars = otherPillars.filter((p) => p.category !== "behavioral");
@@ -1503,8 +1519,10 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   <div class="dash-tab-panel active" data-panel="technical">
     <div class="card">
       <h3>١. ${esc(qualityPillar.name)} <span class="small-muted">(${qualityPillar[weightKey]}%)</span></h3>
-      <p class="small-muted">${workRows.length
-        ? `يُقيَّم كل عمل مسجَّل هذا الربع (${workRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.`
+      <p class="small-muted">${evaluableWorkRows.length
+        ? `يُقيَّم كل عمل مسجَّل هذا الربع (${evaluableWorkRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.${excludedFromEvalCount ? ` (استُبعد ${excludedFromEvalCount} عمل مستثنى من التقييم)` : ""}`
+        : workRows.length
+        ? `كل الأعمال المسجَّلة هذا الربع (${workRows.length}) مستثناة من التقييم.`
         : `لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.`}</p>
       <div id="sampleForms"></div>
     </div>
@@ -1594,7 +1612,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         }
       });
     });
-    const full = Calc.computeFullEvaluation(settings, employee, input, workRows);
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows);
     const liveTotal = document.getElementById("liveTotal");
     if (liveTotal) {
       liveTotal.innerHTML =
@@ -1637,7 +1655,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         return;
       }
     }
-    const full = Calc.computeFullEvaluation(settings, employee, input, workRows);
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows);
     // ندمج المدخلات الخام (القابلة لإعادة التحرير) مع النتائج المحسوبة (لعرضها في اللوحات دون إعادة حساب)
     const combined = {};
     for (const p of settings.pillars) {
