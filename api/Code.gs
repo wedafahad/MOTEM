@@ -452,10 +452,34 @@ function resetWorkLogSubmissionIfNeeded_(employeeId, quarter) {
   }
 }
 
+
+// ✅ حساب الربع من التاريخ — إذا أضاف كاتب عملاً بتاريخ خارج الربع الحالي، ننقله للربع الصحيح
+function getQuarterFromDate_(dateStr) {
+  if (!dateStr) return null;
+  try {
+    const date = new Date(dateStr);
+    const month = date.getMonth() + 1; // 1-12
+    const year = date.getFullYear();
+    const quarter = Math.ceil(month / 3); // 1-4
+    return `Q${quarter}-${year}`;
+  } catch (e) {
+    console.warn("⚠️ Invalid date:", dateStr, e);
+    return null;
+  }
+}
+
 function handleUpsertWork_(actor, payload) {
   const row = payload.row;
   const allowed = ownedWorkIds_(actor);
   if (allowed && !allowed[row.employeeId]) throw new ApiError("لا تملك صلاحية تعديل أعمال هذا الموظف", 403);
+  // ✅ إذا كان للعمل تاريخ خارج الربع الحالي، انقله للربع الصحيح
+  if (row.date) {
+    const dateQuarter = getQuarterFromDate_(row.date);
+    if (dateQuarter && row.quarter !== dateQuarter) {
+      console.log(`📅 تصحيح الربع: العمل بتاريخ ${row.date} → ينتقل من ${row.quarter} إلى ${dateQuarter}`);
+      row.quarter = dateQuarter;
+    }
+  }
   const actorName = actor.isAdmin ? "الإدارة" : actor.employee.name;
   const existing = row.id ? findOne_(SHEET_NAMES.WORKLOG, (r) => r.id === row.id) : null;
   let saved;
