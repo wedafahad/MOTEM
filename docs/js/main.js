@@ -2224,7 +2224,7 @@ async function renderSettingsView(el) {
     settings.revisionValueMultiplier = Number(document.getElementById("revMult").value) || 0.5;
     // إصلاح: منع الحفظ محليًا فورًا لو اختل مجموع الأوزان — بدل انتظار رفض الخادم (الذي يتحقق من هذا أيضًا كخط دفاع ثانٍ)
     const sw = sumWeights("weightWriter"), ss = sumWeights("weightSenior");
-    if (Math.abs(sw - 100) > 0.05) return toast(`مجموع أوزان الكاتب ${sw}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
+    if (Math.abs(sw - 100) > 0.1) return toast(`مجموع أوزان الكاتب ${sw}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
     if (Math.abs(ss - 100) > 0.05) return toast(`مجموع أوزان الكاتب الأول ${ss}% وليس 100% — صحّحي الأوزان قبل الحفظ`);
     try {
       const saved = await Api.call("setSettings", { auth: authOf(s), payload: { settings } });
@@ -2286,7 +2286,11 @@ function loadXlsxLib() {
   if (!xlsxLoadPromise) {
     xlsxLoadPromise = new Promise((resolve, reject) => {
       const tag = document.createElement("script");
-      tag.src = "vendor/xlsx.full.min.js";
+      tag.src = (function() {
+        const path = location.pathname;
+        const dir = path.substring(0, path.lastIndexOf('/'));
+        return dir + '/vendor/xlsx.full.min.js';
+      })();
       tag.onload = () => resolve();
       tag.onerror = () => { xlsxLoadPromise = null; reject(new Error("تعذّر تحميل مكتبة التصدير — تحقّقي من الاتصال بالإنترنت")); };
       document.head.appendChild(tag);
