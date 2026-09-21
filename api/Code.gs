@@ -258,12 +258,18 @@ function directReports_(evaluatorId) {
   return readAll_(SHEET_NAMES.EMPLOYEES).filter((e) => e.managerId === evaluatorId);
 }
 
-function downlineIds_(rootId) {
+function downlineIds_(rootId, employees) {
+  // اقرأ الفريق مرة واحدة بدل طلب CacheService/Sheets لكل موظف في التسلسل.
+  const reportsByManager = new Map();
+  (employees || readAll_(SHEET_NAMES.EMPLOYEES)).forEach((employee) => {
+    if (!reportsByManager.has(employee.managerId)) reportsByManager.set(employee.managerId, []);
+    reportsByManager.get(employee.managerId).push(employee);
+  });
   const ids = {};
   let frontier = [rootId];
   while (frontier.length) {
     const current = frontier.pop();
-    directReports_(current).forEach((r) => {
+    (reportsByManager.get(current) || []).forEach((r) => {
       if (!ids[r.id]) { ids[r.id] = true; frontier.push(r.id); }
     });
   }
@@ -548,17 +554,17 @@ function redactEval_(row) {
     status: row.status, totalScore: row.totalScore, classification: row.classification };
 }
 
-function canSeeEvalDetail_(actor, row) {
+function canSeeEvalDetail_(actor, row, scope) {
   if (actor.isAdmin) return false;
   const me = actor.employee;
   if (actor.asWriter && row.employeeId === me.id) return row.status === "approved";
   if (actor.asEvaluator && row.evaluatorId === me.id) return true;
   // أي مقيّم أعلى هرميًا من المقيّم صاحب التقييم (مو فقط مديره المباشر) يرى التفاصيل — يشمل التقييم
   // الذاتي مقارنة بتقييم المقيّم لأي مستوى إداري أعلى (مدير المدير وهكذا)، لا مستوى واحد فقط.
-  if (actor.asEvaluator && downlineIds_(me.id).indexOf(row.evaluatorId) !== -1) return true;
+  if (actor.asEvaluator && (scope ? scope.downline.has(row.evaluatorId) : downlineIds_(me.id).indexOf(row.evaluatorId) !== -1)) return true;
   // إشراف موسّع صريح (evalScopeAll/evalScopeIds) — بمعزل عن التسلسل الهرمي ومن دون اشتراط كون
   // المُقيَّم نفسه هو المُقيِّم في هذا الصف تحديدًا (اطّلاع كامل على تقييمات كل من في النطاق).
-  if (evaluatesEmployee_(actor, row.employeeId)) return true;
+  if (scope ? scope.evaluates(row.employeeId) : evaluatesEmployee_(actor, row.employeeId)) return true;
   return false;
 }
 
@@ -596,13 +602,20 @@ function handleListEval_(actor, payload) {
   if (actor.isAdmin) return rows.map(redactEval_);
 
   const me = actor.employee;
-  const myDownline = actor.asEvaluator ? downlineIds_(me.id) : [];
+  const employees = actor.asEvaluator ? readAll_(SHEET_NAMES.EMPLOYEES) : [];
+  const myDownline = new Set(actor.asEvaluator ? downlineIds_(me.id, employees) : []);
+  const directIds = new Set(employees.filter((e) => e.managerId === me.id).map((e) => e.id));
+  const extraIds = new Set(me.evalScopeIds || []);
+  const scope = {
+    downline: myDownline,
+    evaluates: (id) => actor.asEvaluator && (me.evalScopeAll || directIds.has(id) || extraIds.has(id)),
+  };
   const visible = [];
   rows.forEach((r) => {
     const isOwnerWriter = actor.asWriter && r.employeeId === me.id;
-    const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.indexOf(r.employeeId) !== -1 || evaluatesEmployee_(actor, r.employeeId));
+    const isOwnerEval = actor.asEvaluator && (r.evaluatorId === me.id || myDownline.has(r.employeeId) || scope.evaluates(r.employeeId));
     if (!isOwnerWriter && !isOwnerEval) return;
-    if (canSeeEvalDetail_(actor, r)) visible.push(withSelfAssessmentVisibility_(actor, r));
+    if (canSeeEvalDetail_(actor, r, scope)) visible.push(withSelfAssessmentVisibility_(actor, r));
     else if (isOwnerWriter) visible.push(redactForOwnerWriterPending_(r)); // درجات المقيّم محجوبة، لكن تقييمها الذاتي هي تراه دومًا
     else visible.push(redactEval_(r));
   });
