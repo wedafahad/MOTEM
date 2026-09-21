@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const Calc = require('../docs/js/calc.js');
 
 test('browser exposes the Calc interface used by evaluation screens', () => {
-  const context = vm.createContext({});
+  const context = vm.createContext({setTimeout: (fn) => { fn(); },});
   vm.runInContext(fs.readFileSync('docs/js/calc.js', 'utf8'), context);
   for (const method of ['computeMetrics', 'computeFullEvaluation', 'scoreFromBand', 'suggestBands']) {
     assert.equal(vm.runInContext(`typeof Calc.${method}`, context), 'function');
@@ -33,7 +33,7 @@ test('full evaluation uses level weights and configured classification', () => {
   assert.equal(Calc.computeRatioPillar({criteria:[{id:'c',type:'rubric',weight:100}]},{},{c:''}).pillarScore,null);
 });
 async function api(response, action='listEval') {
-  const context = vm.createContext({API_BASE_URL:'https://example.invalid',fetch:async()=>response});
+  const context = vm.createContext({setTimeout: (fn) => { fn(); },API_BASE_URL:'https://example.invalid',fetch:async()=>response});
   vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
   return vm.runInContext(`Api.call('${action}')`,context);
 }
@@ -47,7 +47,7 @@ test('API distinguishes unavailable service, invalid lists and genuine empty lis
 
 test('read cache deduplicates requests, clones results, expires and isolates accounts', async () => {
   let calls = 0, now = 0;
-  const context = vm.createContext({Date:{now:()=>now}, fetch:async()=>{ calls++; return {ok:true,json:async()=>({ok:true,data:[{name:'original'}]})}; }, API_BASE_URL:'test'});
+  const context = vm.createContext({setTimeout: (fn) => { fn(); },Date:{now:()=>now}, fetch:async()=>{ calls++; return {ok:true,json:async()=>({ok:true,data:[{name:'original'}]})}; }, API_BASE_URL:'test'});
   vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
   const run = (code) => vm.runInContext(code,context);
   const [a,b] = await Promise.all([run("Api.call('listEval',{auth:{code:'a'}})"),run("Api.call('listEval',{auth:{code:'a'}})")]);
@@ -61,7 +61,7 @@ test('read cache deduplicates requests, clones results, expires and isolates acc
 });
 test('in-flight reads cannot refill cache after invalidation', async () => {
   let finish, calls=0;
-  const context=vm.createContext({API_BASE_URL:'test', fetch:()=>{ calls++; return new Promise(resolve=>{ finish=()=>resolve({ok:true,json:async()=>({ok:true,data:[]})}); }); }});
+  const context=vm.createContext({setTimeout: (fn) => { fn(); },API_BASE_URL:'test', fetch:()=>{ calls++; return new Promise(resolve=>{ finish=()=>resolve({ok:true,json:async()=>({ok:true,data:[]})}); }); }});
   vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
   const first=vm.runInContext("Api.call('listEval')",context);
   vm.runInContext('Api.clearCache()',context); finish(); await first;
@@ -71,7 +71,7 @@ test('team renders before previous-quarter response and keeps table on summary f
   let rejectSummary;
   const slot={isConnected:true,innerHTML:'',querySelector:()=>({})};
   const el={innerHTML:'',querySelectorAll:()=>[],querySelector:()=>slot};
-  const context=vm.createContext({Store:{currentQuarter:()=> '2026-Q3',quarterOptions:()=>['2026-Q3','2026-Q2']},document:{addEventListener(){}},Api:{call:async(action,{payload}={})=>{
+  const context=vm.createContext({setTimeout: (fn) => { fn(); },Store:{currentQuarter:()=> '2026-Q3',quarterOptions:()=>['2026-Q3','2026-Q2']},document:{addEventListener(){}},Api:{call:async(action,{payload}={})=>{
     if(action==='listEmployees') return [{id:'writer',isWriter:true,managerId:'manager',name:'Writer'}];
     if(payload?.quarter==='2026-Q2') return new Promise((_,reject)=>{rejectSummary=reject;});
     return [];
@@ -84,4 +84,30 @@ test('team renders before previous-quarter response and keeps table on summary f
   await new Promise(resolve=>setImmediate(resolve));
   assert.match(el.innerHTML,/Writer/);
   assert.match(slot.innerHTML,/HTTP 404/);
+});
+
+test('transient reads and login recover; writes and rejected credentials never retry', async()=>{
+  async function scenario(action,responses) {
+    let calls=0;
+    const context=vm.createContext({API_BASE_URL:'test',setTimeout:fn=>fn(),fetch:async()=>responses[Math.min(calls++,responses.length-1)]});
+    vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),context);
+    let error, data;
+    try {data=await vm.runInContext(`Api.call('${action}')`,context);} catch(e){error=e;}
+    return {calls,error,data};
+  }
+  const unavailable={ok:false,status:404};
+  const success={ok:true,json:async()=>({ok:true,data:[]})};
+  assert.equal((await scenario('listEval',[unavailable,success])).calls,2);
+  const login=await scenario('login',[unavailable,success]);assert.equal(login.calls,2);assert.equal(login.error,undefined);
+  assert.equal((await scenario('upsertEval',[unavailable,success])).calls,1);
+  assert.equal((await scenario('login',[{ok:true,json:async()=>({ok:false,error:'invalid credentials'})}])).calls,1);
+  assert.equal((await scenario('listEval',[unavailable])).calls,3);
+});
+test('temporary settings failure keeps the authenticated session',async()=>{
+  let cleared=false;
+  const app={innerHTML:''};const elements={app,retryBoot:{},exitBoot:{}};
+  const context=vm.createContext({Store:{currentQuarter:()=> '2026-Q3',get:()=>({role:'evaluator',code:'test'}),clear:()=>{cleared=true;}},document:{addEventListener(){},getElementById:id=>elements[id]},Api:{call:async()=>{throw Object.assign(new Error('temporary'),{transient:true});}}});
+  vm.runInContext(fs.readFileSync('docs/js/main.js','utf8'),context);
+  await vm.runInContext('boot()',context);
+  assert.equal(cleared,false);assert.match(app.innerHTML,/retryBoot/);
 });

@@ -43,39 +43,56 @@ const Api = (() => {
     return copy(await promise);
   }
 
-  async function request(action, { auth, payload } = {}) {
+  function transient(message) {
+    const error = new Error(message);
+    error.transient = true;
+    return error;
+  }
+
+  async function request(action, options) {
+    const attempts = READ_ACTIONS.has(action) || action === "login" || action === "adminLogin" ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try { return await requestOnce(action, options); }
+      catch (error) {
+        if (!error.transient || attempt === attempts - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+      }
+    }
+  }
+
+  async function requestOnce(action, { auth, payload } = {}) {
     let res;
     try {
       res = await fetch(API_BASE_URL, {
         method: "POST",
+        cache: "no-store",
         // text/plain لتفادي preflight CORS مع Apps Script Web App
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action, auth, payload }),
       });
     } catch (err) {
-      throw new Error("تعذّر الاتصال بالخادم — تحقّقي من الاتصال بالإنترنت. (" + err.message + ")");
+      throw transient("تعذّر الاتصال بالخادم مؤقتًا. حاولي مرة أخرى.");
     }
     if (!res.ok) {
-      if (res.status === 404) {
-        throw new Error("تعذّر الوصول إلى خدمة البيانات (HTTP 404). أعيدي المحاولة؛ إذا استمر الخطأ، يلزم التحقق من رابط نشر الخادم وصلاحية الوصول إليه.");
-      }
-      throw new Error("الخادم أعاد خطأ HTTP " + res.status);
+      const message = "تعذّر إكمال الاتصال بالخادم (HTTP " + res.status + "). حاولي مرة أخرى.";
+      if ([404, 408, 429, 500, 502, 503, 504].includes(res.status)) throw transient(message);
+      throw new Error(message);
     }
     let json;
     try {
       json = await res.json();
     } catch (err) {
-      throw new Error("رد الخادم غير صالح (ليس JSON) — تأكد من رابط النشر الصحيح لـ Apps Script");
+      throw transient("تعذّر قراءة استجابة الخادم. حاولي مرة أخرى.");
     }
     if (!json || typeof json !== "object" || typeof json.ok !== "boolean") {
-      throw new Error("استجابة الخادم لا تطابق صيغة البيانات المتوقعة");
+      throw transient("استجابة الخادم لا تطابق صيغة البيانات المتوقعة");
     }
     if (!json.ok) {
       throw new Error(json.error || "خطأ غير معروف من الخادم");
     }
     // لا نعرض البيانات التالفة كسجل فارغ؛ يجب إبقاء فشل التحميل ظاهرًا للمستخدم.
     if (action.indexOf("list") === 0 && !Array.isArray(json.data)) {
-      throw new Error("تعذّر تحميل القائمة: استجابة الخادم غير صالحة. أعيدي المحاولة.");
+      throw transient("تعذّر تحميل القائمة: استجابة الخادم غير صالحة (" + action + "). أعيدي المحاولة.");
     }
     return json.data;
   }

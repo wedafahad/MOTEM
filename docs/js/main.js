@@ -128,7 +128,11 @@ async function boot() {
   try {
     App.settings = await Api.call("getSettings", { auth: authOf(session) });
   } catch (err) {
-    return renderLogin(err.message);
+    if (!err.transient) return renderLogin(err.message);
+    $app().innerHTML = `<div class="login-wrap"><div class="login-card"><div class="error-box" role="alert">${esc(err.message)}</div><button class="btn btn-primary" id="retryBoot">إعادة تحميل بيانات الحساب</button><button class="btn" id="exitBoot">خروج</button></div></div>`;
+    document.getElementById("retryBoot").onclick = () => { Api.clearCache(); boot(); };
+    document.getElementById("exitBoot").onclick = logout;
+    return;
   }
   renderShell();
 }
@@ -176,6 +180,12 @@ function renderLogin(errorMsg) {
 }
 
 async function doLogin(tab) {
+  const button = document.getElementById("loginBtn");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "جارٍ الاتصال…";
+  const tabs = document.querySelectorAll(".role-tabs button");
+  tabs.forEach((item) => { item.disabled = true; });
   try {
     if (tab === "admin") {
       const password = document.getElementById("pwd").value;
@@ -190,9 +200,21 @@ async function doLogin(tab) {
       if (role === "evaluator" && !data.asEvaluator) return renderLogin("هذا الكود ليس كود مقيّم — جرّبي تبويب كاتب");
       Store.set({ role, code, employee: data.employee, asWriter: data.asWriter, asEvaluator: data.asEvaluator });
     }
-    boot();
+    await boot();
   } catch (err) {
-    renderLogin(err.message);
+    let errorBox = document.getElementById("loginError");
+    if (!errorBox) {
+      errorBox = document.createElement("div");
+      errorBox.id = "loginError";
+      errorBox.className = "error-box";
+      errorBox.setAttribute("role", "alert");
+      button.before(errorBox);
+    }
+    errorBox.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "دخول";
+    tabs.forEach((item) => { item.disabled = false; });
   }
 }
 
