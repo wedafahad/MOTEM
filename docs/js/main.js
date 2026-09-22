@@ -295,7 +295,7 @@ function renderShell() {
   document.getElementById("logoutBtn").onclick = logout;
   document.getElementById("refreshBtn").onclick = () => {
     Api.clearCache();
-    renderView();
+    renderView(true);
   };
   document.querySelectorAll(".nav-btn").forEach((b) => (b.onclick = () => { App.view = b.dataset.v; renderShell(); }));
 
@@ -307,7 +307,7 @@ function renderShell() {
   renderView();
 }
 
-function renderView() {
+function renderView(refreshSettings = false) {
   const el = document.getElementById("mainArea");
   el.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
   const map = {
@@ -330,9 +330,17 @@ function renderView() {
     documents: renderMyDocumentsView,
     "team-documents": renderTeamDocumentsView,
   };
-  (map[App.view] || renderDashboardView)(el).catch((err) => {
+  const render = map[App.view] || renderDashboardView;
+  Promise.resolve().then(async () => {
+    if (refreshSettings || !Api.isValidSettings(App.settings)) {
+      App.settings = await Api.call("getSettings", { auth: authOf(App.session) });
+    }
+    if (!el.isConnected) return;
+    return render(el);
+  }).catch((err) => {
+    if (!el.isConnected) return;
     el.innerHTML = `<div class="error-box" role="alert">${esc(err.message)}</div><button class="btn" id="retryViewBtn">إعادة المحاولة</button>`;
-    el.querySelector("#retryViewBtn").onclick = () => { Api.clearCache(); renderView(); };
+    el.querySelector("#retryViewBtn").onclick = () => { Api.clearCache(); renderView(true); };
   });
 }
 

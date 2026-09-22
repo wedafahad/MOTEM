@@ -10,6 +10,13 @@ const Api = (() => {
   let generation = 0;
   const copy = (data) => data === undefined ? undefined : JSON.parse(JSON.stringify(data));
 
+  function isValidSettings(data) {
+    return !!data && typeof data === "object" &&
+      Array.isArray(data.pillars) && data.pillars.length > 0 &&
+      data.pillars.every((pillar) => pillar && typeof pillar.id === "string" && Array.isArray(pillar.criteria)) &&
+      Array.isArray(data.classification);
+  }
+
   function clearCache() {
     generation += 1;
     cache.clear();
@@ -94,8 +101,11 @@ const Api = (() => {
     if (action.indexOf("list") === 0 && !Array.isArray(json.data)) {
       throw transient("تعذّر تحميل القائمة: استجابة الخادم غير صالحة (" + action + "). أعيدي المحاولة.");
     }
+    if (action === "getSettings" && !isValidSettings(json.data)) {
+      throw transient("تعذّر تحميل معايير التقييم كاملة من الخادم. أعيدي المحاولة.");
+    }
     return json.data;
   }
 
-  return { call, clearCache };
+  return { call, clearCache, isValidSettings };
 })();

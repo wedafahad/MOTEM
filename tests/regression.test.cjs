@@ -111,3 +111,18 @@ test('temporary settings failure keeps the authenticated session',async()=>{
   await vm.runInContext('boot()',context);
   assert.equal(cleared,false);assert.match(app.innerHTML,/retryBoot/);
 });
+
+test('settings reject health text and malformed payloads, retry then cache only valid settings',async()=>{
+ const valid={pillars:[{id:'quality',criteria:[]}],classification:[]};
+ let calls=0;const responses=['motem Apps Script server up', {pillars:[]},valid];
+ const c=vm.createContext({setTimeout:fn=>fn(),API_BASE_URL:'test',fetch:async()=>({ok:true,json:async()=>({ok:true,data:responses[calls++]})})});
+ vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),c);
+ const settings=await vm.runInContext("Api.call('getSettings')",c);
+ assert.equal(settings.pillars[0].id,'quality');assert.equal(calls,3);
+ await vm.runInContext("Api.call('getSettings')",c);assert.equal(calls,3);
+});
+test('invalid settings fail clearly instead of reaching settings.pillars.find',async()=>{
+ const c=vm.createContext({setTimeout:fn=>fn(),API_BASE_URL:'test',fetch:async()=>({ok:true,json:async()=>({ok:true,data:'server up'})})});
+ vm.runInContext(fs.readFileSync('docs/js/api.js','utf8'),c);
+ await assert.rejects(vm.runInContext("Api.call('getSettings')",c),/معايير التقييم/);
+});
