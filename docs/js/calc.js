@@ -306,6 +306,39 @@ const Calc = (() => {
     return result;
   }
 
+  /**
+   * يعيد حساب تقييم محفوظ بالإعدادات الحالية، بنفس منطق شاشة التقييم تمامًا (دون أي تدخل يدوي):
+   * الأعمال الخاضعة للتقييم = أعمال الربع ناقص المستثناة، ومعايير ratio تلقائية ما لم يعدّلها المقيّم يدويًا.
+   * يعيد { pillarScores, totalScore, classification } بالشكل الذي يُخزَّن.
+   */
+  function recomputeStoredEvaluation(settings, employee, storedPillarScores, workRows, quarter) {
+    const level = employee.level === "senior" ? "senior" : "writer";
+    const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
+    const input = storedPillarScores ? JSON.parse(JSON.stringify(storedPillarScores)) : {};
+    input.quality = input.quality || { sampleWorkIds: [], perSample: {} };
+    input.quality.perSample = input.quality.perSample || {};
+    const excluded = new Set(input.quality.excludedWorkIds || []);
+    const rows = Array.isArray(workRows) ? workRows : [];
+    const evaluable = rows.filter((w) => !excluded.has(w.id));
+    input.quality.sampleWorkIds = evaluable.map((w) => w.id);
+    for (const p of settings.pillars) {
+      if (p.id === "quality" || !input[p.id]) continue;
+      const scores = input[p.id].criteriaScores || {};
+      const overrides = input[p.id].criteriaOverrides || {};
+      (p.criteria || []).forEach((c) => {
+        if (c.type === "ratio" && !overrides[c.id]) scores[c.id] = null;
+      });
+      input[p.id].criteriaScores = scores;
+    }
+    const full = computeFullEvaluation(settings, employee, input, evaluable, { allWorkRows: rows, quarter });
+    const pillarScores = {};
+    for (const p of settings.pillars) {
+      if ((p[weightKey] || 0) === 0) continue;
+      pillarScores[p.id] = { ...(input[p.id] || {}), ...(full.pillars[p.id] || {}) };
+    }
+    return { pillarScores, totalScore: full.totalScore, classification: full.classification };
+  }
+
   /** اقتراح حدود تلقائي لمعيار ratio بناءً على متوسط أداء الفريق الفعلي. */
   function suggestBands(values, higherIsBetter) {
     const clean = values.filter((v) => v !== null && v !== undefined && !Number.isNaN(v));
@@ -322,6 +355,7 @@ const Calc = (() => {
     scoreFromBand,
     computeMetrics,
     isReviewWork,
+    recomputeStoredEvaluation,
     pillarIntroducedQuarter,
     pillarNotYetIntroduced,
     revisionTierScore,

@@ -1391,12 +1391,45 @@ function myEvaluableWriters(session, employees) {
   return employees.filter((e) => e.isWriter && e.id !== me.id && (e.managerId === me.id || extra.has(e.id)));
 }
 
+/**
+ * إعادة حساب تلقائية: كل تقييم غير معتمد أجراه المقيّم الحالي (لأي ربع) يُعاد حسابه بالإعدادات الحالية،
+ * ويُخزَّن إن تغيّر مجموعه — فلا يبقى مجموع قديم أو فارغ بعد تعديل المعايير والأوزان.
+ * التقييمات المعتمدة لا تُمسّ إطلاقًا (نتيجتها ثابتة كما اعتُمدت). لا يُخزَّن مجموع فارغ فوق مجموع موجود.
+ * يُعيد عدد التقييمات التي حُدّثت.
+ */
+async function autoRecomputeMyEvaluations(s, employees) {
+  if (!s.asEvaluator || !App.settings) return 0;
+  let allEvals;
+  try { allEvals = await Api.call("listEval", { auth: authOf(s), payload: {} }); } catch { return 0; }
+  const candidates = (allEvals || []).filter((ev) => ev.evaluatorId === s.employee.id && ev.status !== "approved" && ev.pillarScores);
+  let updated = 0;
+  const workCache = {};
+  for (const ev of candidates) {
+    const employee = employees.find((e) => e.id === ev.employeeId);
+    if (!employee) continue;
+    try {
+      const key = ev.employeeId + "|" + ev.quarter;
+      workCache[key] = workCache[key] || await Api.call("listWork", { auth: authOf(s), payload: { employeeId: ev.employeeId, quarter: ev.quarter } });
+      const r = Calc.recomputeStoredEvaluation(App.settings, employee, ev.pillarScores, workCache[key], ev.quarter);
+      if (r.totalScore === null || r.totalScore === undefined) continue; // لا يُخزَّن مجموع ناقص
+      const stored = ev.totalScore === null || ev.totalScore === undefined || ev.totalScore === "" ? null : Number(ev.totalScore);
+      if (stored !== null && Math.abs(stored - r.totalScore) < 0.005 && ev.classification === r.classification) continue;
+      await Api.call("upsertEval", { auth: authOf(s), payload: { row: {
+        id: ev.id, employeeId: ev.employeeId, quarter: ev.quarter, status: ev.status,
+        pillarScores: r.pillarScores, totalScore: r.totalScore, classification: r.classification, comments: ev.comments || "",
+      } } });
+      updated++;
+    } catch (err) { console.warn("autoRecompute", ev.id, err); }
+  }
+  return updated;
+}
+
 async function renderTeamView(el) {
   const s = App.session;
-  const [employees, evalRows] = await Promise.all([
-    Api.call("listEmployees", { auth: authOf(s) }),
-    Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } }),
-  ]);
+  const employees = await Api.call("listEmployees", { auth: authOf(s) });
+  const recomputed = await autoRecomputeMyEvaluations(s, employees);
+  if (recomputed) toast(`أُعيد حساب مجموع ${recomputed} تقييم غير معتمد بالمعايير الحالية`);
+  const evalRows = await Api.call("listEval", { auth: authOf(s), payload: { quarter: App.quarter } });
   const reports = myEvaluableWriters(s, employees);
   // كل من تحتك هرميًا بخلاف تقاريرك المباشرين (المستوى الثاني فأعمق) — للاطّلاع الكامل على الفريق وتقييماته
   const directIds = new Set(reports.map((r) => r.id));
