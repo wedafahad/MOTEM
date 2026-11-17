@@ -1814,9 +1814,33 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     const liveTotal = document.getElementById("liveTotal");
     if (liveTotal) {
       liveTotal.innerHTML =
-        `<div class="total-score-num" style="font-size:32px">${full.totalScore ?? "—"}</div><div class="small-muted">${full.classification || "بيانات ناقصة"}</div>`;
+        `<div class="total-score-num" style="font-size:32px">${full.totalScore ?? "—"}</div><div class="small-muted">${full.classification || "بيانات ناقصة"}</div>${incompleteHtml(full)}`;
     }
     return full;
+  }
+
+  /** يسمّي الركائز الناقصة التي تمنع حساب المجموع، وسبب نقص ركيزة الجودة إن وُجد. */
+  function incompleteHtml(full) {
+    if (full.totalScore !== null && full.totalScore !== undefined) return "";
+    const missing = settings.pillars.filter((p) => {
+      const r = full.pillars[p.id];
+      return r && r.weight > 0 && !r.notApplicable && (r.pillarScore === null || r.pillarScore === undefined);
+    }).map((p) => {
+      if (p.id === "quality") {
+        if (!input.quality.sampleWorkIds.length) return `${p.name} (لا توجد أعمال خاضعة للتقييم في سجل هذا الربع)`;
+        const incompleteWorks = input.quality.sampleWorkIds.filter((wid) => {
+          const w = workRows.find((x) => x.id === wid);
+          return !qualityCriteriaFor(w).every((c) => {
+            const v = input.quality.perSample[wid]?.[c.id];
+            return v !== undefined && v !== null && v !== "";
+          });
+        }).map((wid) => workRows.find((x) => x.id === wid)?.title || wid);
+        return incompleteWorks.length ? `${p.name} (أعمال لم تكتمل درجاتها: ${incompleteWorks.join("، ")})` : p.name;
+      }
+      const ratioNoData = p.criteria.filter((c) => c.type === "ratio" && Calc.autoRatioScore(c, full.metrics) === null);
+      return ratioNoData.length ? `${p.name} (لا بيانات في سجل الأعمال لـ: ${ratioNoData.map((c) => c.name).join("، ")} — حرّكي الشريحة لإدخال درجة يدوية)` : p.name;
+    });
+    return missing.length ? `<div class="small-muted" style="margin-top:6px;max-width:420px">ينقص لحساب المجموع: ${missing.map(esc).join(" — ")}</div>` : "";
   }
 
   /** يجمع كل معيار (رئيسي أو عيّنة جودة) بدرجة أقل من 3 بلا سبب مكتوب — لمنع الإرسال قبل تعبئته (بند 2). */
