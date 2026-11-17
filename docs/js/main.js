@@ -1229,11 +1229,17 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   // عمود "التقييم الذاتي" يظهر فقط إذا كانت هذه الركيزة السلوكية تحمل تقييمًا ذاتيًا لأحد معاييرها (بند 1.5)
   const hasSelfCol = p.category === "behavioral" && applicableCriteria.some((c) => selfAssessment[c.id] !== undefined);
   const isQuality = p.id === "quality";
-  const reviewCriteria = isQuality && Array.isArray(p.reviewCriteria) ? p.reviewCriteria : [];
   const rowOf = (wid) => (workRows || []).find((x) => x.id === wid);
   const sampleIds = (isQuality && pr?.sampleWorkIds) || [];
+  // بنود المراجعة: ثابتة للكاتب الأول، وتظهر للكاتب فقط إن كان بين أعماله المقيَّمة عمل مراجعة
+  // (قبل توفر قائمة الأعمال المقيَّمة يُنظر في أعمال الربع المسجّلة).
+  const hasReviewWork = Array.isArray(pr?.sampleWorkIds)
+    ? sampleIds.some((wid) => Calc.isReviewWork(rowOf(wid), p))
+    : (workRows || []).some((w) => Calc.isReviewWork(w, p));
+  const reviewCriteria = isQuality && Array.isArray(p.reviewCriteria) && (level === "senior" || hasReviewWork)
+    ? p.reviewCriteria : [];
   const excludedIds = (isQuality && pr?.excludedWorkIds) || [];
-  const criteriaForWork = (wid) => (Calc.isReviewWork(rowOf(wid), p) ? reviewCriteria : applicableCriteria);
+  const criteriaForWork = (wid) => (Calc.isReviewWork(rowOf(wid), p) ? (p.reviewCriteria || []) : applicableCriteria);
 
   // ركيزة الجودة: ملخص عدد الأعمال (الإجمالي = الخاضعة للتقييم + غير الخاضعة)
   const countsHtml = isQuality && revealValues && pr
@@ -1296,7 +1302,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
         c, revealValues ? pr?.reviewCriteriaAvg?.[c.id] : null, `${c.weight ?? "—"}%`, qualityReasonsHtml(c))).join("")}</div>`
     : "";
 
-  // تفصيل تقييم كل عمل: مطويّ على الشاشة، ويُطبع كاملًا بعد المعدّلات في PDF.
+  // تفصيل تقييم كل عمل: مطويّ على الشاشة فقط، ولا يُطبع في PDF.
   const perWorkItems = isQuality && revealValues && sampleIds.length
     ? sampleIds.map((wid) => {
         const scoresLine = criteriaForWork(wid).map((c) => {
@@ -1310,8 +1316,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   const perWorkHtml = perWorkItems
     ? `<details class="anchor-details screen-only" style="margin-top:12px">
         <summary>تقييم كل عمل على حدة (${sampleIds.length})</summary>${perWorkItems}
-      </details>
-      <div class="print-only per-work-print"><h5 class="criteria-subhead">تقييم كل عمل على حدة (${sampleIds.length})</h5>${perWorkItems}</div>`
+      </details>`
     : "";
   // شفافية: قائمة الأعمال غير الخاضعة للتقييم مع سبب كل استثناء إن وُجد.
   const excludedBreakdownHtml = (isQuality && revealValues && excludedIds.length)
