@@ -1182,6 +1182,8 @@ function migrateSchemaV2_stage1() {
   const existingIds = settings.pillars.map((p) => p.id);
   let added = [];
   defaults.pillars.forEach((p) => {
+    // الاعتمادية لها وزن فعلي ويُخصم مقابلها من الجودة — تُضاف عبر migrateV3_reliabilityReviewTiers فقط
+    if (p.id === "reliability") return;
     if (existingIds.indexOf(p.id) === -1) { settings.pillars.push(p); added.push(p.id); }
   });
   if (added.length) {
@@ -1247,12 +1249,105 @@ function migrateSocialSubTypesV2_stage2() {
   Logger.log("تمّ تحويل " + updated + " عملًا من socialSubType (نص واحد) إلى socialSubTypes (مصفوفة).");
 }
 
+// ============================= إضافات المرحلة ٣ (الاعتمادية، بنود المراجع، جولات التعديل حسب الفئة) =============================
+
+const REVIEW_ACTION_TYPE_ = "مراجعة وتدقيق";
+
+function DEFAULT_RELIABILITY_PILLAR_() {
+  return { id: "reliability", name: "الاعتمادية", type: "rubric_group", category: "behavioral", weightWriter: 5, weightSenior: 5,
+    allowNotApplicable: true, notApplicableHint: "لم يُسند إليه مشروع كامل هذا الربع",
+    criteria: [
+      { id: "reliability_full_project", name: "القدرة على إعداد مشروع كامل بشكل فردي (كالتقارير السنوية)", weight: 100,
+        anchors: { "5": "أعدّ مشروعًا كاملًا بمفرده من الاستلام حتى التسليم، بجودة لم تحتج تدخلًا جوهريًا من غيره",
+          "3": "أنجز المشروع بمفرده لكنه احتاج توجيهًا أو تدخلًا في أجزاء منه (الهيكلة، أو الصياغة، أو الضبط النهائي)",
+          "1": "لم يستطع إكمال المشروع بمفرده، واحتاج إسناد أجزاء جوهرية منه لغيره أو إعادة كتابتها" } },
+    ] };
+}
+
+function DEFAULT_REVIEW_CRITERIA_() {
+  return [
+    { id: "rev_feedback_clarity", name: "وضوح التعليقات للكاتب وقابليتها للتنفيذ", weight: 25,
+      anchors: { "5": "تعليقات محددة ومعلّلة، يفهمها الكاتب وينفّذها دون الرجوع للمراجع",
+        "3": "تعليقات صحيحة لكن بعضها عام أو يحتاج توضيحًا", "1": "تعليقات مبهمة أو غائبة، أو تعديل مباشر دون شرح" } },
+    { id: "rev_language_accuracy", name: "دقة مراجعة الصحة اللغوية", weight: 25,
+      anchors: { "5": "لم يفُت المراجعة أي خطأ إملائي أو نحوي أو في الترقيم",
+        "3": "فاتت أخطاء طفيفة متفرقة", "1": "بقيت أخطاء لغوية متكررة بعد المراجعة" } },
+    { id: "rev_ideas_accuracy", name: "دقة مراجعة الأفكار والبنية", weight: 25,
+      anchors: { "5": "عالجت المراجعة ضعف الأفكار والتسلسل والحجة بوضوح",
+        "3": "التقطت المشكلات الظاهرة فقط في الأفكار والبنية", "1": "اقتصرت على السطح وأغفلت مشكلات جوهرية في الأفكار" } },
+    { id: "rev_fact_check", name: "اكتشاف أخطاء المعلومات والأرقام", weight: 15,
+      anchors: { "5": "تحقّق من الأرقام والأسماء والمعلومات واكتشف كل خطأ فيها",
+        "3": "اكتشف بعض الأخطاء وفاتته أخرى", "1": "لم يتحقق من المعلومات، وبقيت أخطاء واقعية" } },
+    { id: "rev_brief_identity", name: "مطابقة العمل النهائي للبريف والهوية", weight: 10,
+      anchors: { "5": "خرج العمل بعد المراجعة مطابقًا للبريف ونبرة الهوية تمامًا",
+        "3": "مطابق عمومًا مع انحراف بسيط لم يُلتقط", "1": "بقي العمل خارجًا عن البريف أو الهوية بعد المراجعة" } },
+  ];
+}
+
+function DEFAULT_REVISION_ROUNDS_CRITERION_() {
+  return { id: "revision_rounds", name: "جولات تعديل المحتوى لكل مشروع", type: "ratio", metric: "revisionRoundsScore",
+    unit: "جولة", weight: 50, higherIsBetter: false,
+    // درجة كل عمل حسب فئته: حتى حد «5» = 5، حتى حد «3» = 3، وما فوقه = 1 — ثم معدّل الأعمال
+    tiers: { short: { "5": 1, "3": 4 }, long: { "5": 4, "3": 10 } },
+    longCategories: ["التقرير السنوي", "تقرير مشروع + متخصص", "الحملات الإعلانية"],
+    bands: { "5": 1, "3": 3, "1": 4 } };
+}
+
+/**
+ * شغّليها مرة واحدة من محرر Apps Script بعد نشر هذه النسخة (آمنة للتكرار — لا تكرّر أي إضافة):
+ *  1) تضيف ركيزة «الاعتمادية» (سلوكي، 5% للكاتب و5% للكاتب الأول، مع خيار «لا ينطبق») وتخصم 5% من «جودة الكتابة» للمستويين.
+ *  2) تضيف بنود تقييم المراجع لركيزة الجودة (لأعمال «مراجعة وتدقيق»).
+ *  3) تحوّل معيار «جولات تعديل المحتوى» إلى الحساب حسب الفئة (قصير: 1 فأقل=5، 2-4=3، 5+=1 — طويل: 4 فأقل=5، 5-10=3، 11+=1).
+ * لا تمسّ أي تقييم محفوظ: التقييمات المعتمدة تحتفظ بدرجاتها المحسوبة كما هي.
+ */
+function migrateV3_reliabilityReviewTiers() {
+  const settings = getSettings_();
+  const log = [];
+  const quality = settings.pillars.find((p) => p.id === "quality");
+  if (!quality) throw new Error("لا توجد ركيزة quality في الإعدادات — أوقفت الترحيل دون أي تعديل.");
+
+  if (!settings.pillars.some((p) => p.id === "reliability")) {
+    if ((Number(quality.weightWriter) || 0) < 5 || (Number(quality.weightSenior) || 0) < 5) {
+      throw new Error("وزن ركيزة الجودة أقل من 5% — لا يمكن الخصم منها تلقائيًا. عدّلي الأوزان يدويًا ثم أعيدي التشغيل.");
+    }
+    quality.weightWriter = Number(quality.weightWriter) - 5;
+    quality.weightSenior = Number(quality.weightSenior) - 5;
+    settings.pillars.push(DEFAULT_RELIABILITY_PILLAR_());
+    log.push("أُضيفت ركيزة الاعتمادية (5%) وخُصم 5% من الجودة → كاتب " + quality.weightWriter + "% / كاتب أول " + quality.weightSenior + "%");
+  } else log.push("ركيزة الاعتمادية موجودة مسبقًا — لا تغيير.");
+
+  if (!Array.isArray(quality.reviewCriteria) || !quality.reviewCriteria.length) {
+    quality.reviewCriteria = DEFAULT_REVIEW_CRITERIA_();
+    quality.reviewActionType = quality.reviewActionType || REVIEW_ACTION_TYPE_;
+    log.push("أُضيفت بنود تقييم المراجع (" + quality.reviewCriteria.length + " بنود).");
+  } else log.push("بنود المراجع موجودة مسبقًا — لا تغيير.");
+
+  let revCrit = null;
+  settings.pillars.forEach((p) => (p.criteria || []).forEach((c) => { if (c.id === "revision_rounds") revCrit = c; }));
+  if (revCrit && !revCrit.tiers) {
+    const d = DEFAULT_REVISION_ROUNDS_CRITERION_();
+    revCrit.metric = d.metric;
+    revCrit.tiers = d.tiers;
+    revCrit.longCategories = d.longCategories;
+    log.push("حُوِّل معيار جولات التعديل إلى الحساب حسب فئة كل عمل (قصير/طويل).");
+  } else if (!revCrit) log.push("تنبيه: لم يُعثر على معيار revision_rounds — لم يُحوَّل.");
+  else log.push("معيار جولات التعديل متدرّج مسبقًا — لا تغيير.");
+
+  validatePillarWeights_(settings.pillars);
+  setSettings_(settings);
+  audit_("admin", "ترحيل النظام", "ترحيل V3: الاعتمادية/بنود المراجع/جولات التعديل", "System", "-", log.join(" | "));
+  log.forEach((l) => Logger.log(l));
+  Logger.log("=== اكتمل الترحيل V3 ===");
+}
+
 function DEFAULT_SETTINGS_() {
   return {
     revisionValueMultiplier: 0.5,
     adminPassword: "change-me",
     pillars: [
-      { id: "quality", name: "جودة الكتابة والعمل", type: "rubric_group", category: "technical", weightWriter: 60, weightSenior: 45,
+      { id: "quality", name: "جودة الكتابة والعمل", type: "rubric_group", category: "technical", weightWriter: 55, weightSenior: 40,
+        reviewActionType: REVIEW_ACTION_TYPE_,
+        reviewCriteria: DEFAULT_REVIEW_CRITERIA_(),
         criteria: [
           { id: "lang_accuracy", name: "الدقة اللغوية والتحريرية", weightCreative: 15, weightFormal: 15,
             anchors: { "5": "صفر أخطاء إملائية/نحوية، تحرير نظيف دون حاجة لمراجعة تصحيحية",
@@ -1301,8 +1396,7 @@ function DEFAULT_SETTINGS_() {
             anchors: { "5": "معظم أعمال الربع اعتُمدت من أول مسودة دون أي تعديل جوهري على المحتوى",
               "3": "بعض الأعمال احتاجت جولة تعديل واحدة على المحتوى، لكن الغالبية اعتُمدت مباشرة",
               "1": "معظم الأعمال احتاجت أكثر من جولة تعديل على المحتوى قبل قبولها" } },
-          { id: "revision_rounds", name: "جولات تعديل المحتوى لكل مشروع", type: "ratio", metric: "avgContentRevisionRounds",
-            unit: "جولة", weight: 50, bands: { "5": 1, "3": 3, "1": 4 }, higherIsBetter: false },
+          DEFAULT_REVISION_ROUNDS_CRITERION_(),
         ] },
       { id: "discipline", name: "الانضباط التشغيلي", type: "rubric_group", category: "behavioral", weightWriter: 10, weightSenior: 10,
         criteria: [
@@ -1352,6 +1446,7 @@ function DEFAULT_SETTINGS_() {
               "3": "المعلومات صحيحة عمومًا لكن بعضها دون مصدر موثّق واضح، أو يحتاج تحققًا إضافيًا",
               "1": "معلومات غير دقيقة أو غير موثّقة تستدعي تصحيحًا قبل النشر" } },
         ] },
+      DEFAULT_RELIABILITY_PILLAR_(),
     ],
     classification: [
       { min: 4.50, max: 5.00, label: "استثنائي" },

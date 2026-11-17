@@ -111,6 +111,7 @@ function workSummaryHtml(rows, heading) {
       <div class="stat-tile"><div class="stat-num">${stats.textTypesCount}</div><div class="stat-label">عدد أنواع النصوص</div></div>
       <div class="stat-tile"><div class="stat-num">${stats.creativeCount} / ${stats.formalCount}</div><div class="stat-label">نوع الكتابة (إبداعي / رسمي)</div></div>
       <div class="stat-tile"><div class="stat-num">${stats.collaborativeCount}</div><div class="stat-label">عدد الأعمال المشتركة</div></div>
+      <div class="stat-tile"><div class="stat-num">${rows.length}</div><div class="stat-label">إجمالي الأعمال المسجّلة</div></div>
     </div>
     ${actionChipsHtml ? `<p class="small-muted" style="margin:12px 0 4px">نوع الإجراء</p>${actionChipsHtml}` : ""}
     ${stats.revisionsCount ? `<p class="small-muted">* يشمل ${stats.revisionsCount} مراجعة لعمل سابق، محتسَبة بقيمة مخفَّضة بدل قيمة كاملة مكررة.</p>` : ""}
@@ -399,6 +400,12 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
 
   const stats = computeWorkStats(rows);
   const submitted = evalRow?.workLogStatus === "submitted";
+  // تفصيل الخاضع/غير الخاضع للتقييم: قرار المقيّم داخل مسودة التقييم — يراه المقيّم دائمًا،
+  // ويراه الكاتب في سجله الخاص بعد اعتماد التقييم فقط.
+  const excludedIds = evalRow?.pillarScores?.quality?.excludedWorkIds;
+  const canSeeEvalSplit = Array.isArray(excludedIds) && (!isOwn || evalRow?.status === "approved");
+  const excludedSet = new Set(canSeeEvalSplit ? excludedIds : []);
+  const excludedCount = rows.filter((r) => excludedSet.has(r.id)).length;
 
   el.innerHTML = `
   <div class="flex-between">
@@ -413,6 +420,8 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
     <div class="stat-tile"><div class="stat-num">${fmt1(stats.assignedCount)}</div><div class="stat-label">عدد الأعمال الموكلة${stats.revisionsCount ? " *" : ""}</div></div>
     <div class="stat-tile"><div class="stat-num">${stats.projectsCount}</div><div class="stat-label">عدد المشاريع</div></div>
     <div class="stat-tile"><div class="stat-num">${stats.textTypesCount}</div><div class="stat-label">عدد أنواع النصوص</div></div>
+    <div class="stat-tile"><div class="stat-num">${rows.length}</div><div class="stat-label">إجمالي الأعمال المسجّلة</div></div>
+    ${canSeeEvalSplit ? `<div class="stat-tile"><div class="stat-num">${rows.length - excludedCount} / ${excludedCount}</div><div class="stat-label">خاضعة للتقييم / غير خاضعة</div></div>` : ""}
   </div>
   <p class="small-muted" style="margin-top:-10px">مؤشرات عددية للاطّلاع فقط — لا تُحتسب ضمن درجة التقييم.${stats.revisionsCount ? ` * يشمل ${stats.revisionsCount} مراجعة لعمل سابق بقيمة مخفَّضة.` : ""}</p>
   <div class="card">
@@ -431,7 +440,7 @@ async function renderWorkLogView(el, forEmployeeId, readOnlyHeader, isOwn) {
       : r.workCategory === SOCIAL_PARENT_CATEGORY && r.socialSubTypes?.length ? `${r.workCategory} — ${r.socialSubTypes.join("، ")}`
       : r.workCategory || "";
     return `<tr data-id="${r.id}">
-      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}
+      <td>${esc(r.title)}${r.isRevision ? ` <span class="badge badge-pending" title="مراجعة/تحديث لعمل سابق">مراجعة</span>` : ""}${r.isCollaborative ? ` <span class="badge badge-general" title="عمل مشترك">مشترك</span>` : ""}${excludedSet.has(r.id) ? ` <span class="badge badge-draft" title="محسوب في مجموع الأعمال ومؤشرات الانضباط، وخارج درجة الجودة">غير خاضع للتقييم</span>` : ""}
         <div class="small-muted">${esc(categoryLabel)}${r.actionType ? " — " + esc(r.actionType) : ""}</div></td>
       <td><span class="badge ${r.workType === "creative" ? "badge-creative" : "badge-formal"}">${r.workType === "creative" ? "إبداعي" : "رسمي"}</span></td>
       <td>${esc(r.date || "—")}</td>
@@ -1202,9 +1211,10 @@ function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading
     ${pillars.map((p) => {
       const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
       const pillarScore = revealValues ? pr?.pillarScore : null;
+      const isNA = revealValues && pr?.notApplicable;
       return `<div class="chart-row">
         <div class="chart-row-label"><span>${esc(p.name)}</span><span class="small-muted">(${p[weightKey]}%)</span></div>
-        ${scoreBarHtml(pillarScore, revealValues)}
+        ${isNA ? `<span class="small-muted">لا ينطبق</span>` : scoreBarHtml(pillarScore, revealValues)}
       </div>`;
     }).join("")}
   </div>`;
@@ -1212,34 +1222,104 @@ function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading
 
 function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
+  const isNA = !!(revealValues && pr?.notApplicable);
   const pillarScore = revealValues ? pr?.pillarScore : null;
   const applicableCriteria = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
   const selfAssessment = row?.selfAssessment || {};
   // عمود "التقييم الذاتي" يظهر فقط إذا كانت هذه الركيزة السلوكية تحمل تقييمًا ذاتيًا لأحد معاييرها (بند 1.5)
   const hasSelfCol = p.category === "behavioral" && applicableCriteria.some((c) => selfAssessment[c.id] !== undefined);
-  // لركيزة الجودة فقط: تفصيل الأعمال المقيَّمة فعليًا (سياق كل عمل + الرابط) — يظهر للمقيّم والإدارة
-  // عند مراجعة/استعراض التقييم بعد الاعتماد، بدل الاكتفاء بمتوسط المعيار وحده.
-  const sampleBreakdownHtml = (p.id === "quality" && revealValues && pr?.sampleWorkIds?.length)
-    ? `<details class="anchor-details" open style="margin-bottom:12px">
-        <summary>الأعمال المقيَّمة (${pr.sampleWorkIds.length})</summary>
-        ${pr.sampleWorkIds.map((wid) => {
-          const w = (workRows || []).find((x) => x.id === wid);
-          const scoresLine = applicableCriteria.map((c) => {
-            const v = pr.perSample?.[wid]?.[c.id];
-            return `<span class="chip">${esc(c.name)}: <b>${v ?? "—"}</b></span>`;
-          }).join("");
-          return `<div class="divider"></div>${workItemContextHtml(w, wid)}<div class="chip-row" style="margin-top:6px">${scoresLine}</div>`;
-        }).join("")}
-      </details>`
+  const isQuality = p.id === "quality";
+  const reviewCriteria = isQuality && Array.isArray(p.reviewCriteria) ? p.reviewCriteria : [];
+  const rowOf = (wid) => (workRows || []).find((x) => x.id === wid);
+  const sampleIds = (isQuality && pr?.sampleWorkIds) || [];
+  const excludedIds = (isQuality && pr?.excludedWorkIds) || [];
+  const criteriaForWork = (wid) => (Calc.isReviewWork(rowOf(wid), p) ? reviewCriteria : applicableCriteria);
+
+  // ركيزة الجودة: ملخص عدد الأعمال (الإجمالي = الخاضعة للتقييم + غير الخاضعة)
+  const countsHtml = isQuality && revealValues && pr
+    ? (() => {
+        const total = Array.isArray(workRows) ? workRows.length : sampleIds.length + excludedIds.length;
+        const reviewCount = sampleIds.filter((wid) => Calc.isReviewWork(rowOf(wid), p)).length;
+        return `<p class="small-muted quality-counts">إجمالي الأعمال: <b>${total}</b> — الخاضعة للتقييم: <b>${sampleIds.length}</b>${reviewCount ? ` (منها ${reviewCount} عمل مراجعة)` : ""} — غير الخاضعة للتقييم: <b>${excludedIds.length}</b>. الدرجة أعلاه معدّل كل الأعمال الخاضعة للتقييم، ودرجة كل عنصر أدناه معدّله عبر هذه الأعمال.</p>`;
+      })()
     : "";
-  // شفافية: قائمة الأعمال التي استثناها المقيّم من التقييم لهذا الربع مع سبب كل استثناء إن وُجد.
-  const excludedBreakdownHtml = (p.id === "quality" && revealValues && pr?.excludedWorkIds?.length)
-    ? `<details class="anchor-details" style="margin-bottom:12px">
-        <summary>أعمال مستثناة من التقييم (${pr.excludedWorkIds.length})</summary>
-        ${pr.excludedWorkIds.map((wid) => {
-          const w = (workRows || []).find((x) => x.id === wid);
+
+  /** مبرّرات الدرجات الأقل من 3 لعنصر جودة عبر الأعمال (العمل + الدرجة + السبب). */
+  const qualityReasonsHtml = (c) => {
+    if (!revealValues || !pr?.perSample) return "";
+    const items = sampleIds.filter((wid) => criteriaForWork(wid).some((x) => x.id === c.id)).map((wid) => {
+      const v = pr.perSample[wid]?.[c.id];
+      const reason = (pr.perSample[wid]?.reasons?.[c.id] || "").trim();
+      if (v === undefined || v === null || Number(v) >= 3 || !reason) return "";
+      return `<li><b>${esc(rowOf(wid)?.title || wid)}</b> (${fmt1(Number(v))}): ${esc(reason)}</li>`;
+    }).filter(Boolean);
+    return items.length ? `<div class="criterion-reason-display"><b>مبرّرات الدرجات الأقل من 3:</b><ul class="reason-list">${items.join("")}</ul></div>` : "";
+  };
+
+  const criterionCardHtml = (c, score, weightLabel, reasonsHtml) => {
+    const hasScore = score !== null && score !== undefined;
+    const selfScore = revealValues ? selfAssessment[c.id] : null;
+    const hasSelfScore = selfScore !== null && selfScore !== undefined;
+    return `<div class="criterion-card">
+      <div class="criterion-head">
+        <span class="criterion-name">${esc(c.name)}</span>
+        <span class="small-muted criterion-weight">${weightLabel}</span>
+      </div>
+      <div class="criterion-scores">
+        ${hasSelfCol ? `<div class="criterion-score-line"><span class="small-muted">تقييم الكاتب الذاتي</span>${scoreBarHtml(hasSelfScore ? selfScore : null, revealValues)}</div>` : ""}
+        <div class="criterion-score-line"><span class="small-muted">${isQuality ? "المعدّل عبر الأعمال" : "تقييم المقيّم"}</span>${scoreBarHtml(hasScore ? score : null, revealValues && !isNA)}</div>
+      </div>
+      ${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}
+      ${reasonsHtml}
+    </div>`;
+  };
+
+  const writingCriteriaHtml = applicableCriteria.map((c) => {
+    let weightLabel, score, reasonsHtml = "";
+    if (isQuality) {
+      weightLabel = `${c.weightCreative}% إبداعي / ${c.weightFormal}% رسمي`;
+      score = revealValues ? pr?.criteriaAvg?.[c.id] : null;
+      reasonsHtml = qualityReasonsHtml(c);
+    } else {
+      weightLabel = `${c.weight ?? "—"}%`;
+      score = revealValues && !isNA ? (pr?.criteriaScores?.[c.id] ?? pr?.resolved?.[c.id]) : null;
+      const reasonText = pr?.criteriaReasons?.[c.id];
+      reasonsHtml = score !== null && score !== undefined && Number(score) < 3 && reasonText
+        ? `<div class="criterion-reason-display"><b>سبب الدرجة:</b> ${esc(reasonText)}</div>` : "";
+    }
+    return criterionCardHtml(c, score, weightLabel, reasonsHtml);
+  }).join("");
+
+  const reviewCriteriaHtml = reviewCriteria.length
+    ? `<h5 class="criteria-subhead">بنود تقييم أعمال المراجعة («${esc(p.reviewActionType || "مراجعة وتدقيق")}»)</h5>
+      <div class="criterion-list">${reviewCriteria.map((c) => criterionCardHtml(
+        c, revealValues ? pr?.reviewCriteriaAvg?.[c.id] : null, `${c.weight ?? "—"}%`, qualityReasonsHtml(c))).join("")}</div>`
+    : "";
+
+  // تفصيل تقييم كل عمل: مطويّ على الشاشة، ويُطبع كاملًا بعد المعدّلات في PDF.
+  const perWorkItems = isQuality && revealValues && sampleIds.length
+    ? sampleIds.map((wid) => {
+        const scoresLine = criteriaForWork(wid).map((c) => {
+          const v = pr.perSample?.[wid]?.[c.id];
+          return `<span class="chip">${esc(c.name)}: <b>${v ?? "—"}</b></span>`;
+        }).join("");
+        const composite = pr.perWorkScore?.[wid];
+        return `<div class="divider"></div>${workItemContextHtml(rowOf(wid), wid)}${composite !== undefined && composite !== null ? `<p class="small-muted" style="margin:4px 0">درجة العمل: <b>${fmt1(composite)}</b></p>` : ""}<div class="chip-row" style="margin-top:6px">${scoresLine}</div>`;
+      }).join("")
+    : "";
+  const perWorkHtml = perWorkItems
+    ? `<details class="anchor-details screen-only" style="margin-top:12px">
+        <summary>تقييم كل عمل على حدة (${sampleIds.length})</summary>${perWorkItems}
+      </details>
+      <div class="print-only per-work-print"><h5 class="criteria-subhead">تقييم كل عمل على حدة (${sampleIds.length})</h5>${perWorkItems}</div>`
+    : "";
+  // شفافية: قائمة الأعمال غير الخاضعة للتقييم مع سبب كل استثناء إن وُجد.
+  const excludedBreakdownHtml = (isQuality && revealValues && excludedIds.length)
+    ? `<details class="anchor-details" style="margin-top:12px">
+        <summary>أعمال غير خاضعة للتقييم (${excludedIds.length})</summary>
+        ${excludedIds.map((wid) => {
           const reason = pr.exclusionReasons?.[wid];
-          return `<div class="divider"></div>${workItemContextHtml(w, wid)}${reason ? `<p class="small-muted" style="margin-top:6px"><b>سبب الاستثناء:</b> ${esc(reason)}</p>` : ""}`;
+          return `<div class="divider"></div>${workItemContextHtml(rowOf(wid), wid)}${reason ? `<p class="small-muted" style="margin-top:6px"><b>سبب الاستثناء:</b> ${esc(reason)}</p>` : ""}`;
         }).join("")}
       </details>`
     : "";
@@ -1247,38 +1327,15 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   <div class="pillar-block">
     <div class="pillar-block-head">
       <h4>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h4>
-      <b class="pillar-block-score">${revealValues ? fmt1(pillarScore) : "—"}</b>
+      <b class="pillar-block-score">${isNA ? "لا ينطبق" : revealValues ? fmt1(pillarScore) : "—"}</b>
     </div>
-    ${sampleBreakdownHtml}
+    ${isNA ? `<p class="small-muted">لا ينطبق هذا الربع — توزّع وزن الركيزة على بقية الركائز.</p>` : ""}
+    ${countsHtml}
+    ${reviewCriteria.length ? `<h5 class="criteria-subhead">بنود تقييم أعمال الكتابة</h5>` : ""}
+    <div class="criterion-list">${writingCriteriaHtml}</div>
+    ${reviewCriteriaHtml}
+    ${perWorkHtml}
     ${excludedBreakdownHtml}
-    <div class="criterion-list">
-      ${applicableCriteria.map((c) => {
-        let weightLabel, score;
-        if (p.id === "quality") {
-          weightLabel = `${c.weightCreative}% إبداعي / ${c.weightFormal}% رسمي`;
-          score = revealValues ? pr?.criteriaAvg?.[c.id] : null;
-        } else {
-          weightLabel = `${c.weight ?? "—"}%`;
-          score = revealValues ? (pr?.criteriaScores?.[c.id] ?? pr?.resolved?.[c.id]) : null;
-        }
-        const hasScore = score !== null && score !== undefined;
-        const selfScore = revealValues ? selfAssessment[c.id] : null;
-        const hasSelfScore = selfScore !== null && selfScore !== undefined;
-        const reasonText = p.id !== "quality" ? pr?.criteriaReasons?.[c.id] : null;
-        return `<div class="criterion-card">
-          <div class="criterion-head">
-            <span class="criterion-name">${esc(c.name)}</span>
-            <span class="small-muted criterion-weight">${weightLabel}</span>
-          </div>
-          <div class="criterion-scores">
-            ${hasSelfCol ? `<div class="criterion-score-line"><span class="small-muted">تقييم الكاتب الذاتي</span>${scoreBarHtml(hasSelfScore ? selfScore : null, revealValues)}</div>` : ""}
-            <div class="criterion-score-line"><span class="small-muted">تقييم المقيّم</span>${scoreBarHtml(hasScore ? score : null, revealValues)}</div>
-          </div>
-          ${c.anchors ? anchorLegendHtml(c.anchors, hasScore ? score : null) : ""}
-          ${hasScore && Number(score) < 3 && reasonText ? `<div class="criterion-reason-display"><b>سبب الدرجة:</b> ${esc(reasonText)}</div>` : ""}
-        </div>`;
-      }).join("")}
-    </div>
   </div>`;
 }
 
@@ -1549,16 +1606,18 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   // استثناء عمل من التقييم قرار يتخذه المقيّم أثناء التقييم نفسه (لا الكاتب عند تسجيل العمل) — لأي
   // سبب يمنع الحكم عليه بمعايير الكتابة (لم يُراجَع، خارج النطاق، روتيني...). يُحفظ ضمن هذا التقييم
   // تحديدًا (pillarScores.quality)، لا كخاصية دائمة على سجل العمل، فيبقى العمل ظاهرًا في سجل الأعمال
-  // كما هو دون أي أثر على شاشة إضافته. الاستبعاد يُقصي العمل كليًا من ركيزة الجودة ومن مقاييس
-  // computeMetrics (تسليم بالموعد/إنجاز مهام/جولات تعديل) التي تغذّي رضا العميل والانضباط — فلا يؤثر
-  // على الدرجة النهائية إطلاقًا.
+  // ومحسوبًا في مجموع الأعمال. الاستبعاد يُقصيه من ركيزة الجودة ومن جولات التعديل (رضا العميل)،
+  // لكنه يبقى ضمن مؤشرات الانضباط (التسليم بالموعد ونسبة الإنجاز).
   input.quality = input.quality || { sampleWorkIds: [], perSample: {} };
   input.quality.excludedWorkIds = input.quality.excludedWorkIds || [];
   input.quality.exclusionReasons = input.quality.exclusionReasons || {};
   const excludedSet = new Set(input.quality.excludedWorkIds);
   const evaluableWorkRows = workRows.filter((w) => !excludedSet.has(w.id));
   const excludedFromEvalCount = workRows.length - evaluableWorkRows.length;
-  const metrics = Calc.computeMetrics(evaluableWorkRows);
+  const metrics = Calc.computeMetrics(evaluableWorkRows, {
+    allRows: workRows,
+    revisionCriterion: Calc.findTieredRevisionCriterion(settings),
+  });
   input.quality.sampleWorkIds = evaluableWorkRows.map((w) => w.id);
 
   const otherPillars = settings.pillars.filter((p) => p.id !== "quality" && (p[weightKey] || 0) > 0);
@@ -1593,9 +1652,9 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     <div class="card">
       <h3>١. ${esc(qualityPillar.name)} <span class="small-muted">(${qualityPillar[weightKey]}%)</span></h3>
       <p class="small-muted">${evaluableWorkRows.length
-        ? `يُقيَّم كل عمل مسجَّل هذا الربع (${evaluableWorkRows.length} عمل) — بلا استثناء ولا اختيار عيّنة.${excludedFromEvalCount ? ` (استُبعد ${excludedFromEvalCount} عمل مستثنى من التقييم)` : ""}`
+        ? `إجمالي الأعمال المسجّلة هذا الربع: <b>${workRows.length}</b> — الخاضعة للتقييم: <b>${evaluableWorkRows.length}</b> — غير الخاضعة للتقييم: <b>${excludedFromEvalCount}</b>. يُقيَّم كل عمل خاضع للتقييم بلا اختيار عيّنة؛ أعمال «${esc(qualityPillar.reviewActionType || "مراجعة وتدقيق")}» تُقيَّم ببنود المراجع.`
         : workRows.length
-        ? `كل الأعمال المسجَّلة هذا الربع (${workRows.length}) مستثناة من التقييم.`
+        ? `إجمالي الأعمال المسجّلة هذا الربع: <b>${workRows.length}</b> — كلها غير خاضعة للتقييم.`
         : `لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.`}</p>
       <div id="sampleForms"></div>
     </div>
@@ -1619,6 +1678,16 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
 
   renderSampleForms();
   attachSliderHandlers(el);
+  el.querySelectorAll('input[data-ratio="1"]').forEach((inp) => {
+    inp.addEventListener("input", () => { inp.dataset.touched = "1"; recomputeLive(); });
+  });
+  el.querySelectorAll("input.na-pillar-cb").forEach((cb) => {
+    cb.onchange = () => {
+      const body = el.querySelector(`.na-pillar-body[data-pillar="${cb.dataset.pillar}"]`);
+      if (body) body.style.display = cb.checked ? "none" : "";
+      recomputeLive();
+    };
+  });
   recomputeLive();
   renderBehavioralSection(document.getElementById("behavioralLogArea"), employee.id, true);
   wireEvalTabs();
@@ -1633,6 +1702,11 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     });
   }
 
+  /** بنود تقييم العمل: بنود المراجع لأعمال «مراجعة وتدقيق»، وبنود الكتابة لغيرها. */
+  function qualityCriteriaFor(w) {
+    return Calc.isReviewWork(w, qualityPillar) ? qualityPillar.reviewCriteria : qualityPillar.criteria;
+  }
+
   function renderSampleForms() {
     const box = el.querySelector("#sampleForms");
     if (!workRows.length) { box.innerHTML = `<p class="small-muted">لا توجد أعمال مسجّلة لهذا الربع — أضفها من «سجل الأعمال» أولًا.</p>`; return; }
@@ -1645,9 +1719,12 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         <div class="field exclusion-reason-wrap" data-wid="${wid}" style="display:${isExcluded ? "block" : "none"};margin-top:4px">
           <input type="text" class="exclusion-reason-input" data-wid="${wid}" value="${esc(input.quality.exclusionReasons[wid] || "")}" placeholder="سبب الاستثناء (اختياري)" ${locked ? "disabled" : ""}>
         </div>`;
+      const isReview = Calc.isReviewWork(w, qualityPillar);
+      const reviewNote = isReview && !isExcluded
+        ? `<p class="small-muted" style="margin-top:8px"><span class="badge badge-general">عمل مراجعة</span> يُقيَّم ببنود المراجع بدل بنود الكتابة.</p>` : "";
       const bodyHtml = isExcluded
-        ? `<p class="small-muted" style="margin-top:8px">مستثنى من التقييم — لا يُحتسب ضمن درجة الجودة أو مقاييس التسليم/الإنجاز.</p>`
-        : qualityPillar.criteria.map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
+        ? `<p class="small-muted" style="margin-top:8px">غير خاضع للتقييم — يُحتسب في مجموع الأعمال ومؤشرات الانضباط (التسليم بالموعد ونسبة الإنجاز)، ولا يدخل في درجة الجودة أو جولات التعديل.</p>`
+        : reviewNote + qualityCriteriaFor(w).map((c) => rubricSliderHtml(c, input.quality.perSample[wid][c.id], locked, `q-${wid}-${c.id}`, input.quality.perSample[wid].reasons?.[c.id])).join("");
       return `<div class="divider"></div>${workItemContextHtml(w, wid)}${exclusionHtml}${bodyHtml}`;
     }).join("");
     box.querySelectorAll('input[type="range"]').forEach((inp) => {
@@ -1686,7 +1763,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     const blocks = box.querySelectorAll(".rubric-item");
     let idx = 0;
     input.quality.sampleWorkIds.forEach((wid) => {
-      qualityPillar.criteria.forEach((c) => {
+      qualityCriteriaFor(workRows.find((w) => w.id === wid)).forEach((c) => {
         const block = blocks[idx];
         if (block) {
           const slider = block.querySelector(`input[data-crit="${c.id}"]`);
@@ -1703,9 +1780,20 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
     // sync other pillars
     settings.pillars.filter((p) => p.id !== "quality").forEach((p) => {
       input[p.id] = input[p.id] || { criteriaScores: {} };
+      const naCb = el.querySelector(`input.na-pillar-cb[data-pillar="${p.id}"]`);
+      if (naCb) input[p.id].notApplicable = naCb.checked;
       p.criteria.forEach((c) => {
         const inp = el.querySelector(`[data-pillar="${p.id}"][data-crit="${c.id}"]`);
-        if (inp) {
+        if (inp && inp.dataset.ratio === "1") {
+          input[p.id].criteriaOverrides = input[p.id].criteriaOverrides || {};
+          if (inp.dataset.touched === "1") {
+            input[p.id].criteriaScores[c.id] = Number(inp.value);
+            input[p.id].criteriaOverrides[c.id] = true;
+          } else {
+            input[p.id].criteriaScores[c.id] = null; // تلقائي من سجل الأعمال
+            delete input[p.id].criteriaOverrides[c.id];
+          }
+        } else if (inp) {
           const val = inp.value;
           input[p.id].criteriaScores[c.id] = val === "" ? null : Number(val);
         }
@@ -1716,7 +1804,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         }
       });
     });
-    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows);
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows });
     const liveTotal = document.getElementById("liveTotal");
     if (liveTotal) {
       liveTotal.innerHTML =
@@ -1729,6 +1817,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
   function collectMissingReasons() {
     const missing = [];
     otherPillars.forEach((p) => {
+      if (p.allowNotApplicable && input[p.id]?.notApplicable) return; // «لا ينطبق» — لا درجات ولا أسباب مطلوبة
       const applicable = p.criteria.filter((c) => c.type !== "ratio" && (!c.appliesToLevel || c.appliesToLevel === level));
       applicable.forEach((c) => {
         const val = input[p.id]?.criteriaScores?.[c.id];
@@ -1739,7 +1828,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
       });
     });
     input.quality.sampleWorkIds.forEach((wid) => {
-      qualityPillar.criteria.forEach((c) => {
+      qualityCriteriaFor(workRows.find((w) => w.id === wid)).forEach((c) => {
         const val = input.quality.perSample[wid]?.[c.id];
         if (val === null || val === undefined) return;
         if (Number(val) >= 3) return;
@@ -1759,7 +1848,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         return;
       }
     }
-    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows);
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows });
     // ندمج المدخلات الخام (القابلة لإعادة التحرير) مع النتائج المحسوبة (لعرضها في اللوحات دون إعادة حساب)
     const combined = {};
     for (const p of settings.pillars) {
@@ -1815,17 +1904,28 @@ function pillarFormHtml(p, level, input, metrics, selfAssessment, disabled) {
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
   input[p.id] = input[p.id] || { criteriaScores: {} };
   const applicable = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
+  const isNA = !!(p.allowNotApplicable && input[p.id].notApplicable);
+  const naHtml = p.allowNotApplicable
+    ? `<label class="checkbox-row" style="margin-bottom:8px"><input type="checkbox" class="na-pillar-cb" data-pillar="${p.id}" ${isNA ? "checked" : ""} ${disabled ? "disabled" : ""}><span>لا ينطبق هذا الربع (${esc(p.notApplicableHint || "لم يُسند إليه ما يُقاس به هذا المعيار")}) — يتوزّع وزن الركيزة على بقية الركائز</span></label>`
+    : "";
   return `<div class="card">
     <h3>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h3>
+    ${naHtml}
+    <div class="na-pillar-body" data-pillar="${p.id}" ${isNA ? 'style="display:none"' : ""}>
     ${applicable.map((c) => {
       if (c.type === "ratio") {
-        const val = metrics[c.metric];
-        const auto = Calc.scoreFromBand(val, c.bands, c.higherIsBetter);
-        const current = input[p.id].criteriaScores[c.id];
+        const val = c.tiers ? metrics.revisionRoundsScore : metrics[c.metric];
+        const auto = Calc.autoRatioScore(c, metrics);
+        // الدرجة اليدوية تُعتمد فقط إذا حرّك المقيّم الشريحة فعلًا (criteriaOverrides)، وإلا تبقى تلقائية
+        // وتتحدّث مع أي تغيير في سجل الأعمال أو الاستثناءات.
+        const isOverride = !!input[p.id].criteriaOverrides?.[c.id];
+        const current = isOverride ? input[p.id].criteriaScores[c.id] : null;
+        const valText = val === null || val === undefined ? "لا بيانات"
+          : c.tiers ? `متوسط درجات الأعمال حسب فئة كل عمل (قصير/طويل): ${fmt1(val)} من 5` : fmt1(val) + c.unit;
         return `<div class="rubric-item">
-          <div class="rubric-title"><span>${esc(c.name)}</span><span class="small-muted">محسوبة تلقائيًا من سجل الأعمال: ${val === null ? "لا بيانات" : fmt1(val) + c.unit}</span></div>
-          <label class="small-muted">الدرجة (${fmt1(auto) || "—"} تلقائيًا — يمكن تعديلها يدويًا عند الحاجة)</label>
-          <input type="range" min="1" max="5" step="0.1" value="${current ?? auto ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" ${disabled ? "disabled" : ""}>
+          <div class="rubric-title"><span>${esc(c.name)}</span><span class="small-muted">محسوبة تلقائيًا من سجل الأعمال: ${valText}</span></div>
+          <label class="small-muted">الدرجة (${fmt1(auto) || "—"} تلقائيًا${isOverride ? ` — <b>معدّلة يدويًا إلى ${fmt1(current)}</b>` : " — يمكن تعديلها يدويًا عند الحاجة"})</label>
+          <input type="range" min="1" max="5" step="0.1" value="${current ?? auto ?? 3}" data-pillar="${p.id}" data-crit="${c.id}" data-ratio="1" data-touched="${isOverride ? "1" : ""}" ${disabled ? "disabled" : ""}>
         </div>`;
       }
       const selfVal = selfAssessment[c.id];
@@ -1847,6 +1947,7 @@ function pillarFormHtml(p, level, input, metrics, selfAssessment, disabled) {
         </div>
       </div>`;
     }).join("")}
+    </div>
   </div>`;
 }
 
@@ -2192,11 +2293,13 @@ async function renderSettingsView(el) {
           <option value="behavioral" ${p.category === "behavioral" ? "selected" : ""}>القسم السلوكي والمهاراتي</option>
         </select></div>
       </div>
+      <label class="checkbox-row"><input type="checkbox" class="pAllowNA" data-p="${pi}" ${p.allowNotApplicable ? "checked" : ""}><span>تسمح بخيار «لا ينطبق» عند التقييم (يتوزّع وزنها على بقية الركائز لذلك الموظف)</span></label>
       <div class="small-muted">مجموع أوزان الكاتب حاليًا: <b class="${weightOffClass("weightWriter")}">${sumWeights("weightWriter")}%</b> — مجموع أوزان الكاتب الأول: <b class="${weightOffClass("weightSenior")}">${sumWeights("weightSenior")}%</b> (يجب أن يساوي 100% — الحفظ يُرفض إن لم يساوِ)</div>
       <div class="divider"></div>
       <b>المعايير</b>
       ${p.criteria.map((c, ci) => criterionEditorHtml(p, pi, c, ci)).join("")}
       <button class="btn btn-sm addCrit" data-p="${pi}">+ إضافة معيار</button>
+      ${p.id === "quality" ? reviewCriteriaEditorHtml(p, pi) : ""}
     </div>`).join("") + `<button class="btn" id="addPillar">+ إضافة ركيزة جديدة</button>`;
     attachPillarHandlers();
   };
@@ -2205,8 +2308,31 @@ async function renderSettingsView(el) {
   // إصلاح: تمييز بصري فوري حين يختل المجموع عن 100% — الحفظ فعليًا مرفوض في هذه الحالة (انظر saveSettings أدناه)
   function weightOffClass(key) { return Math.abs(sumWeights(key) - 100) > 0.05 ? "text-danger" : ""; }
 
+  /** بنود تقييم أعمال المراجعة داخل ركيزة الجودة (تُطبَّق على الأعمال بنوع الإجراء المحدد). */
+  function reviewCriteriaEditorHtml(p, pi) {
+    const list = Array.isArray(p.reviewCriteria) ? p.reviewCriteria : [];
+    const sum = list.reduce((a, c) => a + (Number(c.weight) || 0), 0);
+    return `<div class="divider"></div>
+      <b>بنود تقييم أعمال المراجعة</b>
+      <p class="small-muted">تُقيَّم بها الأعمال التي نوع إجرائها «${esc(p.reviewActionType || "مراجعة وتدقيق")}» بدل بنود الكتابة أعلاه. مجموع الأوزان: <b class="${Math.abs(sum - 100) > 0.05 ? "text-danger" : ""}">${sum}%</b> (يُفضَّل 100%)</p>
+      ${list.map((c, ri) => `<div class="rubric-item">
+        <div class="flex-between">
+          <input type="text" value="${esc(c.name)}" data-p="${pi}" data-r="${ri}" class="rcName" style="max-width:280px">
+          <button class="icon-btn text-danger delRc" data-p="${pi}" data-r="${ri}">حذف</button>
+        </div>
+        <div class="field"><label>الوزن %</label><input type="number" class="rcW" data-p="${pi}" data-r="${ri}" value="${c.weight || 0}"></div>
+        <div class="grid grid-3">
+          <div class="field"><label>وصف الدرجة 5</label><input type="text" class="ra5" data-p="${pi}" data-r="${ri}" value="${esc(c.anchors?.["5"] || "")}"></div>
+          <div class="field"><label>وصف الدرجة 3</label><input type="text" class="ra3" data-p="${pi}" data-r="${ri}" value="${esc(c.anchors?.["3"] || "")}"></div>
+          <div class="field"><label>وصف الدرجة 1</label><input type="text" class="ra1" data-p="${pi}" data-r="${ri}" value="${esc(c.anchors?.["1"] || "")}"></div>
+        </div>
+      </div>`).join("")}
+      <button class="btn btn-sm addRc" data-p="${pi}">+ إضافة بند مراجعة</button>`;
+  }
+
   function criterionEditorHtml(p, pi, c, ci) {
     const isRatio = c.type === "ratio";
+    const isTiered = isRatio && !!c.tiers;
     return `<div class="rubric-item">
       <div class="flex-between">
         <input type="text" value="${esc(c.name)}" data-p="${pi}" data-c="${ci}" class="cName" style="max-width:280px">
@@ -2217,7 +2343,17 @@ async function renderSettingsView(el) {
           <div class="field"><label>وزن (إبداعي) %</label><input type="number" class="cWC" data-p="${pi}" data-c="${ci}" value="${c.weightCreative}"></div>
           <div class="field"><label>وزن (رسمي) %</label><input type="number" class="cWF" data-p="${pi}" data-c="${ci}" value="${c.weightFormal}"></div>
         </div>` : `<div class="field"><label>الوزن داخل الركيزة %</label><input type="number" class="cW" data-p="${pi}" data-c="${ci}" value="${c.weight || 0}"></div>`}
-      ${isRatio ? `
+      ${isTiered ? `
+        <p class="small-muted">تُحسب درجة كل عمل حسب فئته ثم يؤخذ المعدّل: حتى حد «5» = 5، وحتى حد «3» = 3، وما فوقه = 1.</p>
+        <div class="grid grid-2">
+          <div class="field"><label>قصير — حد "5" (جولة)</label><input type="number" step="1" min="0" class="tier" data-tier="short" data-key="5" data-p="${pi}" data-c="${ci}" value="${c.tiers.short?.["5"] ?? ""}"></div>
+          <div class="field"><label>قصير — حد "3" (جولة)</label><input type="number" step="1" min="0" class="tier" data-tier="short" data-key="3" data-p="${pi}" data-c="${ci}" value="${c.tiers.short?.["3"] ?? ""}"></div>
+          <div class="field"><label>طويل — حد "5" (جولة)</label><input type="number" step="1" min="0" class="tier" data-tier="long" data-key="5" data-p="${pi}" data-c="${ci}" value="${c.tiers.long?.["5"] ?? ""}"></div>
+          <div class="field"><label>طويل — حد "3" (جولة)</label><input type="number" step="1" min="0" class="tier" data-tier="long" data-key="3" data-p="${pi}" data-c="${ci}" value="${c.tiers.long?.["3"] ?? ""}"></div>
+        </div>
+        <div class="field"><label>أنواع الأعمال الطويلة (نوع في كل سطر — الباقي قصير)</label>
+          <textarea rows="3" class="longCats" data-p="${pi}" data-c="${ci}">${esc((c.longCategories || []).join("\n"))}</textarea></div>
+      ` : isRatio ? `
         <div class="grid grid-3">
           <div class="field"><label>حد "5" (${c.unit})</label><input type="number" step="0.1" class="band5" data-p="${pi}" data-c="${ci}" value="${c.bands["5"]}"></div>
           <div class="field"><label>حد "3"</label><input type="number" step="0.1" class="band3" data-p="${pi}" data-c="${ci}" value="${c.bands["3"]}"></div>
@@ -2238,6 +2374,29 @@ async function renderSettingsView(el) {
     pillarsBox.querySelectorAll(".pWriter").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].weightWriter = Number(i.value); drawPillars(); }));
     pillarsBox.querySelectorAll(".pSenior").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].weightSenior = Number(i.value); drawPillars(); }));
     pillarsBox.querySelectorAll(".pCategory").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].category = i.value; }));
+    pillarsBox.querySelectorAll(".pAllowNA").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].allowNotApplicable = i.checked; }));
+    pillarsBox.querySelectorAll(".tier").forEach((i) => (i.onchange = () => {
+      const c = settings.pillars[i.dataset.p].criteria[i.dataset.c];
+      c.tiers[i.dataset.tier] = c.tiers[i.dataset.tier] || {};
+      c.tiers[i.dataset.tier][i.dataset.key] = Number(i.value);
+    }));
+    pillarsBox.querySelectorAll(".longCats").forEach((i) => (i.onchange = () => {
+      settings.pillars[i.dataset.p].criteria[i.dataset.c].longCategories = i.value.split("\n").map((x) => x.trim()).filter(Boolean);
+    }));
+    const rc = (i) => settings.pillars[i.dataset.p].reviewCriteria[i.dataset.r];
+    pillarsBox.querySelectorAll(".rcName").forEach((i) => (i.onchange = () => { rc(i).name = i.value; }));
+    pillarsBox.querySelectorAll(".rcW").forEach((i) => (i.onchange = () => { rc(i).weight = Number(i.value); drawPillars(); }));
+    pillarsBox.querySelectorAll(".ra5,.ra3,.ra1").forEach((i) => (i.onchange = () => {
+      const key = i.classList.contains("ra5") ? "5" : i.classList.contains("ra3") ? "3" : "1";
+      const c = rc(i); c.anchors = c.anchors || {}; c.anchors[key] = i.value;
+    }));
+    pillarsBox.querySelectorAll(".delRc").forEach((b) => (b.onclick = () => { if (confirm("حذف بند المراجعة هذا؟")) { settings.pillars[b.dataset.p].reviewCriteria.splice(b.dataset.r, 1); drawPillars(); } }));
+    pillarsBox.querySelectorAll(".addRc").forEach((b) => (b.onclick = () => {
+      const p = settings.pillars[b.dataset.p];
+      p.reviewCriteria = p.reviewCriteria || [];
+      p.reviewCriteria.push({ id: "rcrit_" + Date.now(), name: "بند مراجعة جديد", weight: 0, anchors: { "5": "", "3": "", "1": "" } });
+      drawPillars();
+    }));
     pillarsBox.querySelectorAll(".delPillar").forEach((b) => (b.onclick = () => { if (confirm("حذف هذه الركيزة بالكامل؟")) { settings.pillars.splice(b.dataset.p, 1); drawPillars(); } }));
     pillarsBox.querySelectorAll(".cName").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].criteria[i.dataset.c].name = i.value; }));
     pillarsBox.querySelectorAll(".cW").forEach((i) => (i.onchange = () => { settings.pillars[i.dataset.p].criteria[i.dataset.c].weight = Number(i.value); }));

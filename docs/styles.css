@@ -212,6 +212,11 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
 .criterion-reason-box textarea { margin-bottom: 0; }
 .criterion-reason-display { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: rgba(200,60,60,0.06); border: 1px solid rgba(200,60,60,0.25); font-size: 13px; }
 .criterion-reason-display b { color: var(--ink-2); }
+.reason-list { margin: 4px 0 0; padding-inline-start: 18px; }
+.reason-list li { margin: 2px 0; }
+.criteria-subhead { margin: 14px 0 8px; font-size: 14px; color: var(--ink-2); }
+.quality-counts { margin: 4px 0 10px; }
+.print-only { display: none; }
 
 /* ===== Score bars (dashboard) ===== */
 .pillar-row { margin-bottom: 14px; }
@@ -360,8 +365,25 @@ input[type="range"] { width: 100%; accent-color: var(--amber); margin: 6px 0; }
   /* تصدير موجز وملوّن: شرح الدرجات (١/٣/٥) لا يظهر إطلاقًا في PDF، والألوان (الأشرطة والشارات) تُطبع كما هي على الشاشة لا رمادية — بناءً على طلب واضح */
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   .anchor-details { display: none !important; }
-  /* التصدير موجز: نظرة عامة لكل قسم فقط بلا تفصيل المعايير — بند 3.2 */
-  .pillar-detail-card { display: none !important; }
+  /* التصدير يعرض معدّل كل ركيزة ومعدّل كل عنصر فيها ومبرّرات الدرجات الأقل من 3، ثم تقييم كل عمل على حدة.
+     شرح الدرجات (١/٣/٥) يبقى مخفيًا. */
+  .screen-only { display: none !important; }
+  .print-only { display: block !important; }
+  .print-eval-sheet .pillar-detail-card { break-inside: auto; }
+  .print-eval-sheet .pillar-block { break-inside: auto; margin-bottom: 10px; }
+  .print-eval-sheet .pillar-block-head { break-after: avoid; }
+  .print-eval-sheet .pillar-block-head h4 { font-size: 12px; margin: 0; }
+  .print-eval-sheet .pillar-block-score { font-size: 13px; }
+  .print-eval-sheet .criterion-list { gap: 4px; }
+  .print-eval-sheet .criterion-card { padding: 5px 8px; break-inside: avoid; }
+  .print-eval-sheet .criterion-name { font-size: 10.5px; }
+  .print-eval-sheet .criterion-weight { font-size: 9px; }
+  .print-eval-sheet .criterion-reason-display { font-size: 9.5px; padding: 4px 6px; margin-top: 4px; }
+  .print-eval-sheet .criteria-subhead { font-size: 10.5px; margin: 8px 0 4px; }
+  .print-eval-sheet .quality-counts { font-size: 9.5px; margin: 2px 0 6px; }
+  .print-eval-sheet .per-work-print { break-before: auto; }
+  .print-eval-sheet .per-work-print .chip { font-size: 9px; padding: 1px 6px; }
+  .print-eval-sheet .per-work-print .btn { display: none !important; }
   /* بند 3.2: التبويبات لعرض الشاشة فقط — عند الطباعة/تصدير PDF تظهر كل الأقسام مرة واحدة كما كانت دائمًا */
   .dash-tabs { display: none !important; }
   .dash-tab-panel { display: block !important; }

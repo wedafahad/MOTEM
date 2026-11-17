@@ -23,19 +23,64 @@ const Calc = (() => {
     }
   }
 
-  /** يحسب مقاييس ركيزة "رضا العميل" و"الانضباط" من سجل الأعمال الفعلي لموظف/ربع معيّن. */
-  function computeMetrics(workRows) {
+  /** النوع الذي يجعل العمل "عمل مراجعة" يُقيَّم ببنود المراجع بدل بنود الكتابة. */
+  const DEFAULT_REVIEW_ACTION_TYPE = "مراجعة وتدقيق";
+  function isReviewWork(work, qualityPillar) {
+    if (!work) return false;
+    const reviewType = (qualityPillar && qualityPillar.reviewActionType) || DEFAULT_REVIEW_ACTION_TYPE;
+    return !!(qualityPillar && Array.isArray(qualityPillar.reviewCriteria) && qualityPillar.reviewCriteria.length) &&
+      work.actionType === reviewType;
+  }
+
+  /** درجة جولات التعديل لعمل واحد (1/3/5) حسب فئته: قصير أو طويل (تقرير سنوي، متخصص، حملات...). */
+  function revisionTierScore(work, criterion) {
+    const tiers = criterion && criterion.tiers;
+    if (!tiers) return null;
+    const longCats = Array.isArray(criterion.longCategories) ? criterion.longCategories : [];
+    const tier = longCats.indexOf(work.workCategory) !== -1 ? tiers.long : tiers.short;
+    if (!tier || !Number.isFinite(Number(tier["5"])) || !Number.isFinite(Number(tier["3"]))) return null;
+    const rounds = Number(work.contentRevisionRounds) || 0;
+    if (rounds <= Number(tier["5"])) return 5;
+    if (rounds <= Number(tier["3"])) return 3;
+    return 1;
+  }
+
+  /**
+   * مقاييس ركيزتي "رضا العميل" و"الانضباط" من سجل الأعمال الفعلي لموظف/ربع معيّن.
+   * workRows: الأعمال الخاضعة للتقييم (تغذّي جولات التعديل).
+   * opts.allRows: كل أعمال الربع بما فيها غير الخاضعة للتقييم (تغذّي التسليم بالموعد ونسبة الإنجاز) — إن لم تُمرَّر تُستخدم workRows.
+   * opts.revisionCriterion: معيار جولات التعديل المتدرّج حسب الفئة (إن وُجد) لحساب revisionRoundsScore.
+   */
+  function computeMetrics(workRows, opts) {
     workRows = Array.isArray(workRows) ? workRows : [];
-    const delivered = workRows.filter((w) => w.delivered);
-    const total = workRows.length;
-    const avgContentRevisionRounds = delivered.length
-      ? delivered.reduce((s, w) => s + (Number(w.contentRevisionRounds) || 0), 0) / delivered.length
+    opts = opts || {};
+    const allRows = Array.isArray(opts.allRows) ? opts.allRows : workRows;
+    const deliveredEvaluable = workRows.filter((w) => w.delivered);
+    const avgContentRevisionRounds = deliveredEvaluable.length
+      ? deliveredEvaluable.reduce((s, w) => s + (Number(w.contentRevisionRounds) || 0), 0) / deliveredEvaluable.length
       : null;
-    const onTimeRate = delivered.length
-      ? (100 * delivered.filter((w) => w.onTime).length) / delivered.length
+    let revisionRoundsScore = null;
+    if (opts.revisionCriterion && deliveredEvaluable.length) {
+      const scores = deliveredEvaluable.map((w) => revisionTierScore(w, opts.revisionCriterion)).filter((v) => v !== null);
+      revisionRoundsScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    }
+    const deliveredAll = allRows.filter((w) => w.delivered);
+    const total = allRows.length;
+    const onTimeRate = deliveredAll.length
+      ? (100 * deliveredAll.filter((w) => w.onTime).length) / deliveredAll.length
       : null;
-    const taskCompletionRate = total ? (100 * delivered.length) / total : null;
-    return { avgContentRevisionRounds, onTimeRate, taskCompletionRate };
+    const taskCompletionRate = total ? (100 * deliveredAll.length) / total : null;
+    const out = { avgContentRevisionRounds, onTimeRate, taskCompletionRate };
+    if (opts.revisionCriterion) out.revisionRoundsScore = revisionRoundsScore;
+    return out;
+  }
+
+  /** يجد معيار جولات التعديل المتدرّج (tiers) في الإعدادات إن وُجد. */
+  function findTieredRevisionCriterion(settings) {
+    for (const p of (settings && settings.pillars) || []) {
+      for (const c of p.criteria || []) if (c.type === "ratio" && c.tiers) return c;
+    }
+    return null;
   }
 
   /** نسبة مزيج الإبداعي/الرسمي هذا الربع — يُستخدم لتحديد أوزان معايير الجودة لكاتب "عام". */
@@ -60,38 +105,67 @@ const Calc = (() => {
     return weights;
   }
 
-  /** يحسب درجة ركيزة الجودة من درجات العينة (متوسط كل معيار عبر الأعمال المختارة). */
+  /**
+   * درجة ركيزة الجودة: كل عمل يُقيَّم ببنوده (بنود الكتابة، أو بنود المراجع لأعمال «مراجعة وتدقيق»)،
+   * فتُحسب درجة مركّبة لكل عمل، ثم معدّلها المرجَّح عبر كل الأعمال (عمل "مراجعة لعمل سابق" بقيمة مخفَّضة).
+   * لعمل الكتابة النتيجة مطابقة رياضيًا للطريقة السابقة (متوسط كل معيار × وزنه).
+   */
   function computeQualityPillar(qualityPillar, perSample, sampleWorkIds, specialty, workRowsForMix, revisionMultiplier) {
     const weights = effectiveQualityWeights(qualityPillar, specialty, workRowsForMix);
+    const reviewCriteria = Array.isArray(qualityPillar.reviewCriteria) ? qualityPillar.reviewCriteria : [];
+    const reviewWeightSum = reviewCriteria.reduce((s, c) => s + (Number(c.weight) || 0), 0) || 100;
+    const reviewWeights = {};
+    reviewCriteria.forEach((c) => { reviewWeights[c.id] = Number(c.weight) || 0; });
     const mult = revisionMultiplier === undefined || revisionMultiplier === null ? 1 : revisionMultiplier;
+    const rowOf = (wid) => (workRowsForMix || []).find((r) => r.id === wid);
     const weightOfSample = (wid) => {
-      const w = (workRowsForMix || []).find((r) => r.id === wid);
+      const w = rowOf(wid);
       return w && w.isRevision ? mult : 1;
     };
-    const criteriaAvg = {};
+    const valid = (v) => !(v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 5);
+
+    const writingIds = [], reviewIds = [];
+    sampleWorkIds.forEach((wid) => (isReviewWork(rowOf(wid), qualityPillar) ? reviewIds : writingIds).push(wid));
+
     let samplesComplete = sampleWorkIds.length > 0;
-    for (const c of qualityPillar.criteria) {
-      // متوسط مرجّح: عينات "مراجعة لعمل سابق" تُحتسب بقيمة مخفَّضة بدل قيمة كاملة مكررة
-      let weightedSum = 0;
-      let weightSum = 0;
-      sampleWorkIds.forEach((wid) => {
-        const v = perSample?.[wid]?.[c.id];
-        if (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 5) { samplesComplete = false; return; }
-        const w = weightOfSample(wid);
-        weightedSum += Number(v) * w;
-        weightSum += w;
-      });
-      criteriaAvg[c.id] = weightSum > 0 ? weightedSum / weightSum : null;
-    }
-    let pillarScore = null;
-    const complete = samplesComplete && qualityPillar.criteria.every((c) => criteriaAvg[c.id] !== null);
-    if (complete) {
-      pillarScore = qualityPillar.criteria.reduce(
-        (sum, c) => sum + (criteriaAvg[c.id] * weights[c.id]) / 100,
-        0
-      );
-    }
-    return { criteriaAvg, weights, pillarScore };
+    const avgOver = (ids, crits) => {
+      const avg = {};
+      for (const c of crits) {
+        let ws = 0, wsum = 0;
+        ids.forEach((wid) => {
+          const v = perSample?.[wid]?.[c.id];
+          if (!valid(v)) { samplesComplete = false; return; }
+          const w = weightOfSample(wid);
+          ws += Number(v) * w;
+          wsum += w;
+        });
+        avg[c.id] = wsum > 0 ? ws / wsum : null;
+      }
+      return avg;
+    };
+    const criteriaAvg = avgOver(writingIds, qualityPillar.criteria);
+    const reviewCriteriaAvg = avgOver(reviewIds, reviewCriteria);
+
+    // درجة مركّبة لكل عمل
+    const perWorkScore = {};
+    let num = 0, den = 0;
+    sampleWorkIds.forEach((wid) => {
+      const isRev = reviewIds.indexOf(wid) !== -1;
+      const crits = isRev ? reviewCriteria : qualityPillar.criteria;
+      if (!crits.every((c) => valid(perSample?.[wid]?.[c.id]))) return;
+      const score = isRev
+        ? crits.reduce((s, c) => s + Number(perSample[wid][c.id]) * reviewWeights[c.id], 0) / reviewWeightSum
+        : crits.reduce((s, c) => s + (Number(perSample[wid][c.id]) * weights[c.id]) / 100, 0);
+      perWorkScore[wid] = score;
+      const m = weightOfSample(wid);
+      num += score * m;
+      den += m;
+    });
+    const pillarScore = samplesComplete && den > 0 ? num / den : null;
+    return {
+      criteriaAvg, reviewCriteriaAvg, weights, reviewWeights, perWorkScore, pillarScore,
+      writingWorkCount: writingIds.length, reviewWorkCount: reviewIds.length,
+    };
   }
 
   /** ركيزة مؤشرات مباشرة (تفاعل / انضباط الشق الرقابي / نمو) — درجات يدوية بأوزان معيار لكل معيار. */
@@ -111,6 +185,15 @@ const Calc = (() => {
     return { pillarScore: complete ? sum : null };
   }
 
+  /** الدرجة التلقائية لمعيار ratio: المتدرّج حسب الفئة (tiers) يأتي درجةً جاهزة، والباقي يُحوَّل عبر الحدود. */
+  function autoRatioScore(c, computedMetrics) {
+    if (c.tiers) {
+      const v = computedMetrics ? computedMetrics.revisionRoundsScore : null;
+      return v === null || v === undefined ? null : v;
+    }
+    return scoreFromBand(computedMetrics ? computedMetrics[c.metric] : null, c.bands, c.higherIsBetter);
+  }
+
   /** ركيزة تحتوي معايير من نوع ratio (تُحسب تلقائيًا) و/أو rubric (يدوي). */
   function computeRatioPillar(pillar, computedMetrics, criteriaScores) {
     const totalWeight = pillar.criteria.reduce((s, c) => s + (c.weight || 0), 0) || 100;
@@ -120,10 +203,9 @@ const Calc = (() => {
     for (const c of pillar.criteria) {
       let score;
       if (c.type === "ratio") {
-        const metricValue = computedMetrics[c.metric];
         score = criteriaScores[c.id] !== undefined && criteriaScores[c.id] !== null && criteriaScores[c.id] !== ""
           ? Number(criteriaScores[c.id]) // override يدوي إن وُجد
-          : scoreFromBand(metricValue, c.bands, c.higherIsBetter);
+          : autoRatioScore(c, computedMetrics);
       } else {
         score = criteriaScores[c.id];
       }
@@ -143,28 +225,40 @@ const Calc = (() => {
     return band ? band.label : null;
   }
 
-  /** الدالة الرئيسية: تحسب كل الركائز + الإجمالي بناءً على مسودة تقييم كاملة. */
-  function computeFullEvaluation(settings, employee, pillarScoresInput, workRowsForQuarter) {
+  /**
+   * الدالة الرئيسية: تحسب كل الركائز + الإجمالي بناءً على مسودة تقييم كاملة.
+   * workRowsForQuarter: الأعمال الخاضعة للتقييم. opts.allWorkRows: كل أعمال الربع (لمؤشرات الانضباط).
+   * ركيزة allowNotApplicable المعلَّمة notApplicable تُستبعد ويتوزّع وزنها على بقية الركائز لهذا الموظف.
+   */
+  function computeFullEvaluation(settings, employee, pillarScoresInput, workRowsForQuarter, opts) {
+    opts = opts || {};
     const level = employee.level === "senior" ? "senior" : "writer";
     const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
-    const metrics = computeMetrics(workRowsForQuarter);
+    const metrics = computeMetrics(workRowsForQuarter, {
+      allRows: opts.allWorkRows || workRowsForQuarter,
+      revisionCriterion: findTieredRevisionCriterion(settings),
+    });
     const result = { pillars: {}, totalScore: null, classification: null, metrics };
 
-    let totalWeightSum = 0;
+    let applicableWeightSum = 0;
     let weightedSum = 0;
     let allComplete = true;
 
     for (const pillar of settings.pillars) {
       const pWeight = pillar[weightKey] || 0;
-      totalWeightSum += pWeight;
       if (pWeight === 0) {
         // ركيزة لا تنطبق على هذا المستوى إطلاقًا (كالقيادة بالنسبة لكاتب عادي) — تُستبعد كليًا من الاكتمال والاحتساب
         result.pillars[pillar.id] = { pillarScore: null, weight: 0 };
         continue;
       }
+      const input = pillarScoresInput[pillar.id] || {};
+      if (pillar.allowNotApplicable && input.notApplicable) {
+        result.pillars[pillar.id] = { pillarScore: null, weight: pWeight, notApplicable: true };
+        continue;
+      }
+      applicableWeightSum += pWeight;
       let pillarResult;
       if (pillar.id === "quality") {
-        const input = pillarScoresInput.quality || {};
         pillarResult = computeQualityPillar(
           pillar,
           input.perSample || {},
@@ -174,22 +268,21 @@ const Calc = (() => {
           settings.revisionValueMultiplier
         );
       } else if (pillar.criteria.some((c) => c.type === "ratio")) {
-        const input = pillarScoresInput[pillar.id] || {};
         pillarResult = computeRatioPillar(pillar, metrics, input.criteriaScores || {});
       } else {
-        const input = pillarScoresInput[pillar.id] || {};
         pillarResult = computeFlatPillar(pillar, input.criteriaScores || {}, level);
       }
-      result.pillars[pillar.id] = { ...pillarResult, weight: pWeight };
+      result.pillars[pillar.id] = { ...pillarResult, weight: pWeight, notApplicable: false };
       if (pillarResult.pillarScore === null) {
         allComplete = false;
       } else {
-        weightedSum += (pillarResult.pillarScore * pWeight) / 100;
+        weightedSum += pillarResult.pillarScore * pWeight;
       }
     }
 
-    if (allComplete && totalWeightSum > 0) {
-      result.totalScore = Math.round(weightedSum * 100) / 100;
+    if (allComplete && applicableWeightSum > 0) {
+      // عند اكتمال الأوزان (100%) دون استبعاد، القسمة على المجموع = القسمة على 100 كما كانت سابقًا
+      result.totalScore = Math.round((weightedSum / applicableWeightSum) * 100) / 100;
       result.classification = classify(result.totalScore, settings.classification);
     }
     return result;
@@ -210,6 +303,10 @@ const Calc = (() => {
   return {
     scoreFromBand,
     computeMetrics,
+    isReviewWork,
+    revisionTierScore,
+    findTieredRevisionCriterion,
+    autoRatioScore,
     creativeMix,
     effectiveQualityWeights,
     computeQualityPillar,
