@@ -120,3 +120,21 @@ test('migration V3 on live-shaped settings: idempotent, keeps sums at 100', () =
   assert.ok(rev.tiers && rev.metric === 'revisionRoundsScore');
   for (const k of ['weightWriter', 'weightSenior']) assert.equal(stored.pillars.reduce((s, p) => s + p[k], 0), 100);
 });
+
+test('past quarters: reliability auto N/A before 2026-Q4, required from 2026-Q4', () => {
+  const settings = {
+    pillars: [
+      { id: 'p', weightWriter: 95, weightSenior: 95, criteria: [{ id: 'c', weight: 100 }] },
+      { id: 'reliability', allowNotApplicable: true, weightWriter: 5, weightSenior: 5, criteria: [{ id: 'r', weight: 100 }] },
+    ],
+    classification: [{ min: 0, max: 5, label: 'x' }],
+  };
+  const emp = { level: 'writer' };
+  const input = { p: { criteriaScores: { c: 4 } } };
+  const old = Calc.computeFullEvaluation(settings, emp, input, [], { quarter: '2026-Q2' });
+  assert.equal(old.totalScore, 4);
+  assert.equal(old.pillars.reliability.notIntroduced, true);
+  assert.equal(Calc.computeFullEvaluation(settings, emp, input, [], { quarter: '2025-Q4' }).totalScore, 4);
+  assert.equal(Calc.computeFullEvaluation(settings, emp, input, [], { quarter: '2026-Q4' }).totalScore, null);
+  assert.equal(Calc.computeFullEvaluation(settings, emp, input, [], { quarter: '2027-Q1' }).totalScore, null);
+});

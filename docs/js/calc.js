@@ -75,6 +75,20 @@ const Calc = (() => {
     return out;
   }
 
+  /**
+   * الربع الذي بدأ فيه تطبيق ركيزة. تقييمات الأرباع السابقة له تُعامَل فيها الركيزة كـ«لا ينطبق» تلقائيًا
+   * (حتى لا يصير تقييم ربع قديم ناقصًا عند فتحه وحفظه بعد إضافة ركيزة جديدة).
+   * الاعتمادية أُضيفت في 2026-Q4؛ القيمة الافتراضية لها تغطّي الإعدادات المرحَّلة قبل وجود هذا الحقل.
+   */
+  function pillarIntroducedQuarter(pillar) {
+    if (pillar && pillar.introducedQuarter) return pillar.introducedQuarter;
+    return pillar && pillar.id === "reliability" ? "2026-Q4" : null;
+  }
+  function pillarNotYetIntroduced(pillar, quarter) {
+    const q0 = pillarIntroducedQuarter(pillar);
+    return !!(q0 && quarter && String(quarter) < String(q0));
+  }
+
   /** يجد معيار جولات التعديل المتدرّج (tiers) في الإعدادات إن وُجد. */
   function findTieredRevisionCriterion(settings) {
     for (const p of (settings && settings.pillars) || []) {
@@ -252,6 +266,10 @@ const Calc = (() => {
         continue;
       }
       const input = pillarScoresInput[pillar.id] || {};
+      if (pillarNotYetIntroduced(pillar, opts.quarter)) {
+        result.pillars[pillar.id] = { pillarScore: null, weight: pWeight, notApplicable: true, notIntroduced: true };
+        continue;
+      }
       if (pillar.allowNotApplicable && input.notApplicable) {
         result.pillars[pillar.id] = { pillarScore: null, weight: pWeight, notApplicable: true };
         continue;
@@ -304,6 +322,8 @@ const Calc = (() => {
     scoreFromBand,
     computeMetrics,
     isReviewWork,
+    pillarIntroducedQuarter,
+    pillarNotYetIntroduced,
     revisionTierScore,
     findTieredRevisionCriterion,
     autoRatioScore,

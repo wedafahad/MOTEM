@@ -1256,6 +1256,7 @@ const REVIEW_ACTION_TYPE_ = "مراجعة وتدقيق";
 function DEFAULT_RELIABILITY_PILLAR_() {
   return { id: "reliability", name: "الاعتمادية", type: "rubric_group", category: "behavioral", weightWriter: 5, weightSenior: 5,
     allowNotApplicable: true, notApplicableHint: "لم يُسند إليه مشروع كامل هذا الربع",
+    introducedQuarter: "2026-Q4", // تقييمات الأرباع السابقة تُعامَل فيها كـ«لا ينطبق» تلقائيًا
     criteria: [
       { id: "reliability_full_project", name: "القدرة على إعداد مشروع كامل بشكل فردي (كالتقارير السنوية)", weight: 100,
         anchors: { "5": "أعدّ مشروعًا كاملًا بمفرده من الاستلام حتى التسليم، بجودة لم تحتج تدخلًا جوهريًا من غيره",

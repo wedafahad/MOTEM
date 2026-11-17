@@ -1211,7 +1211,7 @@ function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading
     ${pillars.map((p) => {
       const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
       const pillarScore = revealValues ? pr?.pillarScore : null;
-      const isNA = revealValues && pr?.notApplicable;
+      const isNA = revealValues && (pr?.notApplicable || Calc.pillarNotYetIntroduced(p, row?.quarter));
       return `<div class="chart-row">
         <div class="chart-row-label"><span>${esc(p.name)}</span><span class="small-muted">(${p[weightKey]}%)</span></div>
         ${isNA ? `<span class="small-muted">لا ينطبق</span>` : scoreBarHtml(pillarScore, revealValues)}
@@ -1222,7 +1222,8 @@ function pillarsOverviewChartHtml(pillars, weightKey, row, revealValues, heading
 
 function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
   const pr = row && row.pillarScores ? row.pillarScores[p.id] : null;
-  const isNA = !!(revealValues && pr?.notApplicable);
+  const notIntroduced = Calc.pillarNotYetIntroduced(p, row?.quarter);
+  const isNA = !!(revealValues && (pr?.notApplicable || notIntroduced));
   const pillarScore = revealValues ? pr?.pillarScore : null;
   const applicableCriteria = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
   const selfAssessment = row?.selfAssessment || {};
@@ -1334,7 +1335,7 @@ function pillarStructureHtml(p, weightKey, row, revealValues, level, workRows) {
       <h4>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h4>
       <b class="pillar-block-score">${isNA ? "لا ينطبق" : revealValues ? fmt1(pillarScore) : "—"}</b>
     </div>
-    ${isNA ? `<p class="small-muted">لا ينطبق هذا الربع — توزّع وزن الركيزة على بقية الركائز.</p>` : ""}
+    ${isNA ? `<p class="small-muted">${notIntroduced ? `لا ينطبق — تُطبَّق هذه الركيزة ابتداءً من ${esc(Calc.pillarIntroducedQuarter(p))}` : "لا ينطبق هذا الربع"} — توزّع وزن الركيزة على بقية الركائز.</p>` : ""}
     ${countsHtml}
     ${reviewCriteria.length ? `<h5 class="criteria-subhead">بنود تقييم أعمال الكتابة</h5>` : ""}
     <div class="criterion-list">${writingCriteriaHtml}</div>
@@ -1809,7 +1810,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         }
       });
     });
-    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows });
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows, quarter: App.quarter });
     const liveTotal = document.getElementById("liveTotal");
     if (liveTotal) {
       liveTotal.innerHTML =
@@ -1853,7 +1854,7 @@ function renderEvalForm(el, employee, workRows, behavioralRows, existing) {
         return;
       }
     }
-    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows });
+    const full = Calc.computeFullEvaluation(settings, employee, input, evaluableWorkRows, { allWorkRows: workRows, quarter: App.quarter });
     // ندمج المدخلات الخام (القابلة لإعادة التحرير) مع النتائج المحسوبة (لعرضها في اللوحات دون إعادة حساب)
     const combined = {};
     for (const p of settings.pillars) {
@@ -1909,6 +1910,12 @@ function pillarFormHtml(p, level, input, metrics, selfAssessment, disabled) {
   const weightKey = level === "senior" ? "weightSenior" : "weightWriter";
   input[p.id] = input[p.id] || { criteriaScores: {} };
   const applicable = p.criteria.filter((c) => !c.appliesToLevel || c.appliesToLevel === level);
+  if (Calc.pillarNotYetIntroduced(p, App.quarter)) {
+    return `<div class="card">
+    <h3>${esc(p.name)} <span class="small-muted">(${p[weightKey]}%)</span></h3>
+    <p class="small-muted">لا ينطبق — هذه الركيزة تُطبَّق ابتداءً من ${esc(Calc.pillarIntroducedQuarter(p))}، ويتوزّع وزنها على بقية الركائز في تقييمات الأرباع السابقة.</p>
+  </div>`;
+  }
   const isNA = !!(p.allowNotApplicable && input[p.id].notApplicable);
   const naHtml = p.allowNotApplicable
     ? `<label class="checkbox-row" style="margin-bottom:8px"><input type="checkbox" class="na-pillar-cb" data-pillar="${p.id}" ${isNA ? "checked" : ""} ${disabled ? "disabled" : ""}><span>لا ينطبق هذا الربع (${esc(p.notApplicableHint || "لم يُسند إليه ما يُقاس به هذا المعيار")}) — يتوزّع وزن الركيزة على بقية الركائز</span></label>`
